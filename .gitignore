@@ -4,14 +4,9 @@ dist/
 *.log
 
 # Build artifacts
-vendor/_built/
-public/geo/world.*.json
-public/geo/world.polygons.tier*.json
-public/geo/world.borders.tier*.json
-public/geo/adjacency.json
-
-# Bench (committed selectively)
-bench/runs/
+public/data/tiles/*.bin*
+public/data/manifest.json
+public/data/countries.json
 
 # Editor
 .vscode/
@@ -24,16 +19,14 @@ Thumbs.db
 .omc/artifacts/
 .omc/state/
 .omc/logs/
+.omc/handoffs/
 .claude/
 
 # Env
 .env
 .env.local
-.env.*.local
 
 # Coverage
 coverage/
 *.lcov
-
-# TS incremental build cache
 *.tsbuildinfo
