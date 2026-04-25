@@ -3,10 +3,8 @@ dist/
 .vite/
 *.log
 
-# Build artifacts
-public/data/tiles/*.bin*
-public/data/manifest.json
-public/data/countries.json
+# Build artifacts (committed per SPEC Open Q 7 — bake-and-commit)
+# NB: tier .bin.br files committed so Vercel deploys without re-running bake.
 
 # Editor
 .vscode/
