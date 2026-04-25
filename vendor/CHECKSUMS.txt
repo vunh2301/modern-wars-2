@@ -1,0 +1,2 @@
+# Natural Earth 50m admin0 countries — SHA256 (SPEC Section 4.3 step 1)
+8dd7d1883996a7d894301bae9b3dd0c1c7f943fa406738f8a570e863b920f119  ne_50m_admin_0_countries.geojson
