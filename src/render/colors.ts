@@ -28,11 +28,30 @@ function hslToHex(h: number, s: number, l: number): number {
 }
 
 /**
- * Deterministic ISO_A2 → hue 0..360. Uses FNV-1a 32-bit hash mixed with
- * golden-angle offset to spread adjacent ISO codes (US, CA, MX) into very
- * different hues. Justin feedback 2026-04-26: previous (code0*137 + code1*23) % 360
- * gave US (354) = CA (354) = same red. Big neighbors with identical color is unreadable.
+ * Curated political-map palette (Risk / Hearts of Iron style).
+ * Justin feedback 2026-04-26: random HSL hues "không đẹp, không đúng màu bản đồ
+ * thế giới". 14 hand-picked colors with high saturation + medium lightness +
+ * good distinction; assigned via ISO hash so adjacent neighbors get different
+ * indices. Repeats acceptable (only 195 countries, 14 palette → ~14 same-color,
+ * but golden-ratio spread + neighbor-aware would be Phase 4).
  */
+const POLITICAL_PALETTE = [
+  0xc0392b, // brick red
+  0x2980b9, // strong blue
+  0xf39c12, // amber
+  0x16a085, // teal green
+  0x8e44ad, // purple
+  0x27ae60, // emerald
+  0xd35400, // pumpkin orange
+  0x2c3e50, // midnight blue
+  0xc71585, // medium violet red
+  0x1abc9c, // turquoise
+  0xe67e22, // carrot orange
+  0x34495e, // wet asphalt
+  0x9b59b6, // amethyst
+  0xe74c3c, // bright red
+];
+
 const FNV_OFFSET = 0x811c9dc5;
 const FNV_PRIME = 0x01000193;
 
@@ -45,16 +64,11 @@ function fnv1a(s: string): number {
   return h;
 }
 
-const GOLDEN_RATIO = 0.61803398875;
+void hslToHex; // kept for future fallback
 
 export function isoToColor(iso: string): number {
   const h = fnv1a(iso);
-  // Map hash to [0, 1), apply golden-angle for hue spread.
-  const fraction = (h / 0xffffffff + GOLDEN_RATIO) % 1;
-  const hue = Math.floor(fraction * 360);
-  const sat = 62 + ((h >>> 8) % 20);   // 62-81
-  const lit = 50 + ((h >>> 16) % 12);  // 50-61
-  return hslToHex(hue, sat, lit);
+  return POLITICAL_PALETTE[h % POLITICAL_PALETTE.length] ?? 0x808080;
 }
 
 /**

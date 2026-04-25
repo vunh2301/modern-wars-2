@@ -482,7 +482,7 @@ async function main(): Promise<void> {
 
   // Clean stale tile files
   for (const f of readdirSync(TILES_DIR)) {
-    if (f.endsWith('.bin.br') || f.endsWith('.bin.gz')) unlinkSync(join(TILES_DIR, f));
+    if (f.endsWith('.bin.br') || f.endsWith('.bin.gz') || f.endsWith('.bin')) unlinkSync(join(TILES_DIR, f));
   }
 
   const manifest: { tiles: Record<string, { file: string; sizeKm: number; hexCount: number; bytesCompressed: number; hash: string }> } = { tiles: {} };
@@ -502,7 +502,10 @@ async function main(): Promise<void> {
 
     const compressed = packHexes(hexes);
     const hash = contentHash(compressed);
-    const filename = `world-${tier.name}.${hash}.bin.gz`;
+    // NB: filename ends `.bin` (NOT `.bin.gz`) so Vercel/Vite don't apply
+    // Content-Encoding: gzip and double-decompress. Body content IS gzipped;
+    // browser uses DecompressionStream('gzip') manually (src/data/tiers.ts).
+    const filename = `world-${tier.name}.${hash}.bin`;
     writeFileSync(join(TILES_DIR, filename), compressed);
     manifest.tiles[tier.name] = {
       file: `tiles/${filename}`,
