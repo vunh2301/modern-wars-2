@@ -1,19 +1,33 @@
 import { PixiRoot } from './render/PixiRoot';
 import { FpsOverlay } from './ui/FpsOverlay';
 import { SpeedControl } from './ui/SpeedControl';
+import { Leaderboard } from './ui/Leaderboard';
+import { BattleCounter } from './ui/BattleCounter';
+import { WinnerOverlay } from './ui/WinnerOverlay';
+import { Settings } from './ui/Settings';
 
 /**
- * Root layout. Phase 2 wires SpeedControl onto the HUD; sim runner is
- * created inside PixiRoot once `WorldData` is loaded.
+ * Root layout. SPEC Section 20.4 mobile-first HUD.
  *
- * Phase 4 will add Leaderboard + BattleCounter + WinnerOverlay + Settings.
+ * Layer order (z-stack):
+ *  - Pixi canvas (background)
+ *  - SpeedControl (top center)
+ *  - Settings (top right)
+ *  - Leaderboard (right side)
+ *  - BattleCounter (bottom left)
+ *  - FpsOverlay (top left)
+ *  - WinnerOverlay (full-screen modal — only when winner)
  */
 export function App(): JSX.Element {
   return (
     <div className="app-root" style={{ width: '100%', height: '100%', position: 'relative' }}>
       <PixiRoot />
       <SpeedControl />
+      <Settings />
+      <Leaderboard />
+      <BattleCounter />
       <FpsOverlay />
+      <WinnerOverlay />
     </div>
   );
 }
