@@ -24,20 +24,18 @@ module.exports = {
   overrides: [
     {
       // SPEC Section 8.5 rule 2: Math.random banned in sim/data layers
+      // (Math.sqrt/max/etc. allowed — only Math.random forbidden via AST selector)
       files: ['src/sim/**/*.{ts,tsx}', 'src/data/**/*.{ts,tsx}'],
       rules: {
-        'no-restricted-globals': [
-          'error',
-          {
-            name: 'Math',
-            message: 'Use seedrandom via src/utils/rng.ts. Math.random() forbidden in src/sim/** and src/data/** (SPEC Section 8.5 rule 2).',
-          },
-        ],
         'no-restricted-syntax': [
           'error',
           {
             selector: "MemberExpression[object.name='Math'][property.name='random']",
-            message: 'Math.random() banned in sim/data layers. Use seedrandom (SPEC Section 8.5).',
+            message: 'Math.random() banned in sim/data layers. Use seedrandom via src/utils/rng.ts (SPEC Section 8.5 rule 2).',
+          },
+          {
+            selector: "CallExpression[callee.name='nanoid']",
+            message: 'nanoid banned in sim layer (non-deterministic). Use deterministic Battle.id format `b-${attacker}-${defender}-${startTick}` per Section 4.2.',
           },
         ],
       },
