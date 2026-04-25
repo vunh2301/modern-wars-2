@@ -19,6 +19,7 @@ import { createCapitalMarkersLayer } from './layers/capitalMarkers';
 import { startCaptureSubscriber } from '../sim/captureSubscriber';
 import { disposeAudio } from '../audio/engine';
 import { createLodSwitcher } from './lod';
+import { attachContextLossHandler } from './contextLoss';
 import type { Container } from 'pixi.js';
 
 /**
@@ -147,6 +148,10 @@ export function PixiRoot(): JSX.Element {
       });
       const lodUnsub = lod.bind();
       localCleanups.push(lodUnsub);
+
+      // Phase 8: WebGL context loss handler (Section 13.3).
+      const ctxLoss = attachContextLossHandler(app);
+      localCleanups.push(() => ctxLoss.detach());
 
       // Center on world.
       viewport.moveCenter(1800, 900);
