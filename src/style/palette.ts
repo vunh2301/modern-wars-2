@@ -42,3 +42,12 @@ export function hexToPixiTint(hex: string): number {
   const cleaned = hex.startsWith('#') ? hex.slice(1) : hex;
   return parseInt(cleaned, 16);
 }
+
+/**
+ * Convert `#RRGGBB` to RGBA bytes [r, g, b, 255]. Used to build the
+ * 1×N RGBA LUT texture for the borders shader (SPEC Section 5.3).
+ */
+export function hexToRgba(hex: string): [number, number, number, number] {
+  const n = hexToPixiTint(hex);
+  return [(n >> 16) & 0xff, (n >> 8) & 0xff, n & 0xff, 255];
+}
