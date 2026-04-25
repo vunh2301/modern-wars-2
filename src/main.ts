@@ -66,9 +66,26 @@ async function bootstrap(): Promise<void> {
   w.__mwZoom = viewport.scale.x;
   w.__mwHexCount = tier.hexes.length;
 
+  // Justin 2026-04-26: borders chỉ visible khi zoom >= 0.9× để tránh sọc
+  // mờ moiré ở fit-to-screen. Inner-country hexes seamless via pure-fill texture.
+  const BORDERS_VISIBLE_ZOOM = 0.9;
+  hexLayer.setBordersVisible(viewport.scale.x >= BORDERS_VISIBLE_ZOOM);
+
+  // Debug hook for headless screenshot tests — không dùng trong gameplay.
+  w.__mwViewport = viewport;
+  w.__mwSetZoom = (z: number): void => {
+    viewport.setZoom(z, true);
+    hexLayer.setBordersVisible(z >= BORDERS_VISIBLE_ZOOM);
+    w.__mwZoom = z;
+    // pixi-viewport.setZoom() không emit 'zoomed' (chỉ user-driven mới emit).
+    // Fire manually để LOD switcher pick up tier change cho headless test.
+    viewport.emit('zoomed', { type: 'animate', viewport });
+  };
+
   const updateHud = (): void => {
     w.__mwZoom = viewport.scale.x;
     w.__mwTier = currentTier;
+    hexLayer.setBordersVisible(viewport.scale.x >= BORDERS_VISIBLE_ZOOM);
   };
 
   // Debounce LOD switch so rapid pinch / momentum scale changes don't thrash.
