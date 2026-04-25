@@ -91,28 +91,25 @@ export type PolygonTierFile = {
 };
 
 /**
- * Pre-tessellated stroke ribbon Mesh per LOD tier
- * (`world.borders.tier{1,2}.json`). SPEC Section 4.1 `BorderTierFile` + Section 5.3.
+ * Border segment list per LOD tier (`world.borders.tier{1,2}.json`).
+ * SPEC Section 4.1 `BorderTierFile` + Section 5.3.
  *
- * `countryIndexAttribute*` are JSON number[] for human-readability; runtime
- * parses to Float32Array. Future optim: emit binary `.bin` (Section 4.1 note).
+ * Phase 1a MVP uses compact segment-list form (deduplicated edges). The Phase 1b
+ * boot loader tessellates ribbon strips at runtime for the LUT shader. Full
+ * pre-tessellated form (with vertices/indices/segmentTable/countryIndexAttribute)
+ * deferred to Phase 7 binary asset optimization.
+ *
+ * Each segment = 6 numbers: `[x0, y0, x1, y1, countryIndexLeft, countryIndexRight]`.
+ * countryIndexRight = -1 for coastlines (border vs ocean).
  */
 export type BorderTierFile = {
   schemaVersion: 1;
   tier: 1 | 2;
-  vertices: number[];
-  indices: number[];
-  segmentTable: Array<{
-    countryIndexLeft: number;
-    /** -1 if border vs ocean (coastline) */
-    countryIndexRight: number;
-    indexStart: number;
-    indexCount: number;
-  }>;
-  /** Per-vertex country-index for shader LUT lookup (Section 5.3) */
-  countryIndexAttribute: number[];
-  /** Per-vertex country-index right; -1 for coastlines */
-  countryIndexAttributeRight: number[];
+  /** Flat array: [x0,y0, x1,y1, leftIdx, rightIdx] × segmentCount */
+  segments: number[];
+  segmentCount: number;
+  /** = countries.length, used as shader uniform bound for LUT */
+  countryCount: number;
 };
 
 /**
