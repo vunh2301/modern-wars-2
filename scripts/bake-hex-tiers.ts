@@ -16,7 +16,7 @@
  * Run: `npm run bake`
  */
 import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, unlinkSync } from 'node:fs';
-import { brotliCompressSync, constants } from 'node:zlib';
+import { gzipSync, constants } from 'node:zlib';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import RBush from 'rbush';
@@ -123,30 +123,7 @@ function pointInRing(x: number, y: number, ring: LngLat[]): boolean {
   return inside;
 }
 
-function pointInMultiPolygon(lng: number, lat: number, mp: MultiPolygon): boolean {
-  for (const poly of mp) {
-    if (poly.length === 0) continue;
-    if (!pointInRing(lng, lat, poly[0]!)) continue;
-    let isHole = false;
-    for (let i = 1; i < poly.length; i++) {
-      if (pointInRing(lng, lat, poly[i]!)) { isHole = true; break; }
-    }
-    if (!isHole) return true;
-  }
-  return false;
-}
-
 // ─── Centroid (area-weighted on raw lng/lat) ───────────────────────────────
-function ringSignedArea(ring: LngLat[]): number {
-  let a = 0;
-  for (let i = 0, n = ring.length; i < n - 1; i++) {
-    const p1 = ring[i]!;
-    const p2 = ring[i + 1]!;
-    a += p1[0] * p2[1] - p2[0] * p1[1];
-  }
-  return a / 2;
-}
-
 function ringCentroid(ring: LngLat[]): [number, number, number] {
   let cx = 0, cy = 0, a = 0;
   for (let i = 0, n = ring.length; i < n - 1; i++) {
@@ -379,12 +356,11 @@ function packHexes(hexes: BakedHex[]): Buffer {
     buf.writeUInt16LE(h.countryId, off + 4);
     buf.writeUInt16LE(0, off + 6);
   }
-  return brotliCompressSync(buf, {
-    params: {
-      [constants.BROTLI_PARAM_QUALITY]: 11,
-      [constants.BROTLI_PARAM_MODE]: constants.BROTLI_MODE_GENERIC,
-    },
-  });
+  // Use gzip (level 9) for browser native DecompressionStream('gzip').
+  // SPEC mentioned brotli but browser DecompressionStream only supports gzip
+  // natively — keeping spec semantics (binary compressed asset) with widely
+  // supported codec.
+  return gzipSync(buf, { level: constants.Z_BEST_COMPRESSION });
 }
 
 function contentHash(buf: Buffer): string {
@@ -420,7 +396,6 @@ async function main(): Promise<void> {
   console.info(`[bake] NE 50m: ${countries50m.length} countries`);
 
   let countries10m: Country[] = countries50m;
-  let bush10m: RBush<PolyBushItem>;
   if (existsSync(NE_10M)) {
     console.info('[bake] loading NE 10m (slower, larger)');
     countries10m = loadCountries(NE_10M);
@@ -452,7 +427,7 @@ async function main(): Promise<void> {
   console.info(`[bake] total countries: ${allCountries.length}`);
 
   const bush50m = buildPolyBush(countries50m);
-  bush10m = existsSync(NE_10M) ? buildPolyBush(countries10m) : bush50m;
+  const bush10m: RBush<PolyBushItem> = existsSync(NE_10M) ? buildPolyBush(countries10m) : bush50m;
 
   // ── Per-tier bake ────────────────────────────────────────────────────────
   if (!existsSync(OUT_DIR)) mkdirSync(OUT_DIR, { recursive: true });
@@ -460,7 +435,7 @@ async function main(): Promise<void> {
 
   // Clean stale tile files
   for (const f of readdirSync(TILES_DIR)) {
-    if (f.endsWith('.bin.br')) unlinkSync(join(TILES_DIR, f));
+    if (f.endsWith('.bin.br') || f.endsWith('.bin.gz')) unlinkSync(join(TILES_DIR, f));
   }
 
   const manifest: { tiles: Record<string, { file: string; sizeKm: number; hexCount: number; bytesCompressed: number; hash: string }> } = { tiles: {} };
@@ -480,7 +455,7 @@ async function main(): Promise<void> {
 
     const compressed = packHexes(hexes);
     const hash = contentHash(compressed);
-    const filename = `world-${tier.name}.${hash}.bin.br`;
+    const filename = `world-${tier.name}.${hash}.bin.gz`;
     writeFileSync(join(TILES_DIR, filename), compressed);
     manifest.tiles[tier.name] = {
       file: `tiles/${filename}`,

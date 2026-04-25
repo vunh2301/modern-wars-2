@@ -2,25 +2,25 @@
   "schemaVersion": 1,
   "tiles": {
     "50km": {
-      "file": "tiles/world-50km.308a106f7c47.bin.br",
+      "file": "tiles/world-50km.59747a4d6102.bin.gz",
       "sizeKm": 50,
       "hexCount": 76894,
-      "bytesCompressed": 59337,
-      "hash": "308a106f7c47"
+      "bytesCompressed": 173285,
+      "hash": "59747a4d6102"
     },
     "25km": {
-      "file": "tiles/world-25km.bb59e31153af.bin.br",
+      "file": "tiles/world-25km.857603037dd0.bin.gz",
       "sizeKm": 25,
       "hexCount": 305985,
-      "bytesCompressed": 159897,
-      "hash": "bb59e31153af"
+      "bytesCompressed": 671406,
+      "hash": "857603037dd0"
     },
     "10km": {
-      "file": "tiles/world-10km.5a671842c059.bin.br",
+      "file": "tiles/world-10km.9fbd17c93e0a.bin.gz",
       "sizeKm": 10,
       "hexCount": 1139584,
-      "bytesCompressed": 587980,
-      "hash": "5a671842c059"
+      "bytesCompressed": 2485709,
+      "hash": "9fbd17c93e0a"
     }
   }
 }
