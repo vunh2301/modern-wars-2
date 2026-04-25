@@ -71,22 +71,38 @@ async function bootstrap(): Promise<void> {
     w.__mwTier = currentTier;
   };
 
+  // Debounce LOD switch so rapid pinch / momentum scale changes don't thrash.
+  let lodSwitchTimer: ReturnType<typeof setTimeout> | null = null;
+  let lodInFlight = false;
+
+  const maybeSwitchLod = (): void => {
+    if (lodSwitchTimer) clearTimeout(lodSwitchTimer);
+    lodSwitchTimer = setTimeout(() => {
+      lodSwitchTimer = null;
+      if (lodInFlight) return;
+      const next = pickTier(viewport.scale.x, availableTiers, currentTier);
+      if (next === currentTier) return;
+      lodInFlight = true;
+      void (async () => {
+        try {
+          const td = await loadTier(next);
+          currentTier = next;
+          hexLayer.setTier(td, lut);
+          w.__mwTier = currentTier;
+          w.__mwHexCount = td.hexes.length;
+          console.info(`[lod] → ${next} at zoom ${viewport.scale.x.toFixed(2)}`);
+        } catch (err) {
+          console.warn(`[lod] tier ${next} load failed`, err);
+        } finally {
+          lodInFlight = false;
+        }
+      })();
+    }, 250);
+  };
+
   viewport.on('zoomed', () => {
     updateHud();
-    void (async () => {
-      const next = pickTier(viewport.scale.x, availableTiers);
-      if (next === currentTier) return;
-      try {
-        const td = await loadTier(next);
-        currentTier = next;
-        hexLayer.setTier(td, lut);
-        w.__mwTier = currentTier;
-        w.__mwHexCount = td.hexes.length;
-        console.info(`[lod] switched to tier ${next} at zoom ${viewport.scale.x.toFixed(2)}`);
-      } catch (err) {
-        console.warn(`[lod] tier ${next} load failed`, err);
-      }
-    })();
+    maybeSwitchLod();
   });
   viewport.on('moved', updateHud);
 }
