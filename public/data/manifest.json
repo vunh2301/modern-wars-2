@@ -16,11 +16,11 @@
       "hash": "ab368b230e77"
     },
     "10km": {
-      "file": "tiles/world-10km.2d3c10a3d273.bin.gz",
+      "file": "tiles/world-10km.f65a270074b0.bin.gz",
       "sizeKm": 10,
-      "hexCount": 402181,
-      "bytesCompressed": 843478,
-      "hash": "2d3c10a3d273"
+      "hexCount": 1170500,
+      "bytesCompressed": 2525330,
+      "hash": "f65a270074b0"
     }
   }
 }

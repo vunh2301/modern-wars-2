@@ -27,14 +27,33 @@ function hslToHex(h: number, s: number, l: number): number {
   );
 }
 
+/**
+ * Deterministic ISO_A2 → hue 0..360. Uses FNV-1a 32-bit hash mixed with
+ * golden-angle offset to spread adjacent ISO codes (US, CA, MX) into very
+ * different hues. Justin feedback 2026-04-26: previous (code0*137 + code1*23) % 360
+ * gave US (354) = CA (354) = same red. Big neighbors with identical color is unreadable.
+ */
+const FNV_OFFSET = 0x811c9dc5;
+const FNV_PRIME = 0x01000193;
+
+function fnv1a(s: string): number {
+  let h = FNV_OFFSET >>> 0;
+  for (let i = 0; i < s.length; i++) {
+    h = (h ^ s.charCodeAt(i)) >>> 0;
+    h = Math.imul(h, FNV_PRIME) >>> 0;
+  }
+  return h;
+}
+
+const GOLDEN_RATIO = 0.61803398875;
+
 export function isoToColor(iso: string): number {
-  const code0 = iso.charCodeAt(0);
-  const code1 = iso.charCodeAt(1) || 0;
-  const hash = code0 * 137 + code1 * 23;
-  const hue = hash % 360;
-  // Slight modulation by second char to avoid same-hue neighbors clustering.
-  const sat = 60 + (code1 % 20);
-  const lit = 48 + ((code0 + code1) % 12);
+  const h = fnv1a(iso);
+  // Map hash to [0, 1), apply golden-angle for hue spread.
+  const fraction = (h / 0xffffffff + GOLDEN_RATIO) % 1;
+  const hue = Math.floor(fraction * 360);
+  const sat = 62 + ((h >>> 8) % 20);   // 62-81
+  const lit = 50 + ((h >>> 16) % 12);  // 50-61
   return hslToHex(hue, sat, lit);
 }
 

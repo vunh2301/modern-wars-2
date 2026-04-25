@@ -278,11 +278,11 @@ function lookupCountry(
   lng: number,
   lat: number,
   bush: RBush<PolyBushItem>,
-  countries: Country[],
+  countriesById: Map<number, Country>,
 ): number {
   const candidates = bush.search({ minX: lng, minY: lat, maxX: lng, maxY: lat });
   for (const c of candidates) {
-    const country = countries[c.countryId - 1];
+    const country = countriesById.get(c.countryId);
     if (!country) continue;
     const poly = country.multipoly[c.polyIdx];
     if (!poly) continue;
@@ -304,6 +304,9 @@ function bakeTier(
   countries: Country[],
   bush: RBush<PolyBushItem>,
 ): BakedHex[] {
+  // Build by-id lookup map (id may not equal index after cross-source re-ID).
+  const countriesById = new Map<number, Country>();
+  for (const c of countries) countriesById.set(c.id, c);
   const sizeRad = hexInradiusRad(sizeKm);
   const horizSpacing = 1.5 * sizeRad;
   const vertSpacing = Math.sqrt(3) * sizeRad;
@@ -328,7 +331,7 @@ function bakeTier(
       if (my < minMercY || my > maxMercY) continue;
       const [lng, lat] = mercatorToLngLat(mx, my);
       total++;
-      const countryId = lookupCountry(lng, lat, bush, countries);
+      const countryId = lookupCountry(lng, lat, bush, countriesById);
       if (countryId === 0) { oceanSkipped++; continue; }
       hexes.push({ q, r, countryId });
     }
