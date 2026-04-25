@@ -4,7 +4,9 @@ import type { Viewport } from 'pixi-viewport';
 import { palette } from '../style/palette';
 import { loadWorld, type WorldLoadProgress } from '../data/loadWorld';
 import type { WorldData } from '../data/types';
-import { useOwnership } from '../state/store';
+import { useGameStore } from '../state/store';
+import { initialCountries, initialSides } from '../sim/init';
+import { createSimRunner } from '../sim/tick';
 import { emit } from '../telemetry/emit';
 import { Loading, type BootStep } from '../ui/Loading';
 import { createStage } from './stage';
@@ -76,8 +78,22 @@ export function PixiRoot(): JSX.Element {
       setStep('building');
       setProgress(1);
 
-      // Init store ownership map from world.
-      useOwnership.getState().initOwnership(Object.keys(world.countries));
+      // Init full GameState from world (Phase 2 — Section 6.4 initial state).
+      const countries = initialCountries(world);
+      const sides = initialSides(world, countries);
+      useGameStore.getState().init({
+        countries,
+        sides,
+        rngSeed: 'mw2-default',
+      });
+
+      // Start sim runner driven by Pixi ticker. Section 8.5 fixed-step accumulator.
+      const sim = createSimRunner({ meta: world.countries });
+      const onTickerFrame = (): void => {
+        sim.step(app.ticker.deltaMS);
+      };
+      app.ticker.add(onTickerFrame);
+      localCleanups.push(() => app.ticker.remove(onTickerFrame));
 
       const viewport = createViewport(app);
       viewportRef.current = viewport;

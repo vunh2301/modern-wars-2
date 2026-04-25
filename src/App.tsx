@@ -1,16 +1,18 @@
 import { PixiRoot } from './render/PixiRoot';
 import { FpsOverlay } from './ui/FpsOverlay';
+import { SpeedControl } from './ui/SpeedControl';
 
 /**
- * Root layout. Phase 0 placeholder — sole purpose is mounting Pixi + FPS overlay
- * to verify renderer reaches 60fps on an empty scene.
+ * Root layout. Phase 2 wires SpeedControl onto the HUD; sim runner is
+ * created inside PixiRoot once `WorldData` is loaded.
  *
- * Subsequent phases will add HUD (Section 20.4), leaderboard (Phase 4), settings, etc.
+ * Phase 4 will add Leaderboard + BattleCounter + WinnerOverlay + Settings.
  */
 export function App(): JSX.Element {
   return (
     <div className="app-root" style={{ width: '100%', height: '100%', position: 'relative' }}>
       <PixiRoot />
+      <SpeedControl />
       <FpsOverlay />
     </div>
   );
