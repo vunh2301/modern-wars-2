@@ -14,6 +14,10 @@ import { createViewport, resizeViewport } from './viewport';
 import { createOceanLayer } from './layers/ocean';
 import { createCountryFillsLayer } from './layers/countryFills';
 import { createBordersLayer } from './layers/borders';
+import { createTroopsLayer } from './layers/troops';
+import { createCapitalMarkersLayer } from './layers/capitalMarkers';
+import { startCaptureSubscriber } from '../sim/captureSubscriber';
+import { disposeAudio } from '../audio/engine';
 
 /**
  * End-to-end Pixi mount. SPEC Sections 5.1, 5.4, 13.1, 15.1.
@@ -113,6 +117,20 @@ export function PixiRoot(): JSX.Element {
       viewport.addChild(borders.mesh);
       const bordersUnsub = borders.bind();
       localCleanups.push(bordersUnsub, () => borders.destroy());
+
+      // Phase 5: troop particles (z=4) + capital markers (z=6).
+      const troops = createTroopsLayer(world);
+      viewport.addChild(troops.root);
+      const troopsUnsub = troops.bind();
+      localCleanups.push(troopsUnsub, () => troops.destroy());
+
+      const capitals = createCapitalMarkersLayer(world);
+      viewport.addChild(capitals.root);
+      localCleanups.push(() => capitals.destroy());
+
+      // Capture subscriber: SFX + haptic on ownership flips.
+      const captureUnsub = startCaptureSubscriber();
+      localCleanups.push(captureUnsub, () => disposeAudio());
 
       // Center on world.
       viewport.moveCenter(1800, 900);

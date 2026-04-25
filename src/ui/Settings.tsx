@@ -7,13 +7,23 @@
 import { useState } from 'react';
 import { useGameStore } from '../state/store';
 import { palette } from '../style/palette';
+import { ensureAudio, isAudioInitialized } from '../audio/engine';
 
 export function Settings(): JSX.Element {
   const [open, setOpen] = useState(false);
   const seed = useGameStore((s) => s.rngSeed);
   const setRngSeed = useGameStore((s) => s.setRngSeed);
   const [draftSeed, setDraftSeed] = useState(seed);
-  const [audioEnabled, setAudioEnabled] = useState(false);
+  const [audioEnabled, setAudioEnabled] = useState(isAudioInitialized());
+
+  const onAudioToggle = (next: boolean): void => {
+    setAudioEnabled(next);
+    if (next) {
+      void ensureAudio();
+    }
+    // Note: disposeAudio invoked at unmount (Section 15.3); toggle off here
+    // just stops emitting new SFX (caller-side gating).
+  };
   const [scanlines, setScanlines] = useState(true);
 
   const applySeed = (): void => {
@@ -71,7 +81,7 @@ export function Settings(): JSX.Element {
         >
           <div style={{ color: palette.cyan, marginBottom: 10, letterSpacing: '0.15em', textTransform: 'uppercase' }}>◆ Settings</div>
 
-          <Toggle label="Audio (Phase 5)" value={audioEnabled} onChange={setAudioEnabled} disabled />
+          <Toggle label="Audio" value={audioEnabled} onChange={onAudioToggle} />
           <Toggle label="Scanlines (FX)" value={scanlines} onChange={setScanlines} />
 
           <div style={{ marginTop: 12 }}>
