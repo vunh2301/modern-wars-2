@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- iPhone Safari: no scale, fit screen, no zoom-on-tap (SPEC Section 11 Phase 0) -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="theme-color" content="#040d18" />
+    <meta name="description" content="Modern Wars — Hex Map Renderer (Phase 1: map render only, no gameplay)" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <title>Modern Wars — Hex Map</title>
+    <style>
+      *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+      html, body { width: 100%; height: 100%; background: #040d18; overflow: hidden; touch-action: none; }
+      body { font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif; }
+      #pixi-host { position: fixed; inset: 0; }
+    </style>
+  </head>
+  <body>
+    <div id="pixi-host"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
