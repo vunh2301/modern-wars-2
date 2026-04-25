@@ -18,6 +18,8 @@ import { createTroopsLayer } from './layers/troops';
 import { createCapitalMarkersLayer } from './layers/capitalMarkers';
 import { startCaptureSubscriber } from '../sim/captureSubscriber';
 import { disposeAudio } from '../audio/engine';
+import { createLodSwitcher } from './lod';
+import type { Container } from 'pixi.js';
 
 /**
  * End-to-end Pixi mount. SPEC Sections 5.1, 5.4, 13.1, 15.1.
@@ -131,6 +133,20 @@ export function PixiRoot(): JSX.Element {
       // Capture subscriber: SFX + haptic on ownership flips.
       const captureUnsub = startCaptureSubscriber();
       localCleanups.push(captureUnsub, () => disposeAudio());
+
+      // LOD switcher (Section 5.2 + 5.5 hysteresis).
+      const lod = createLodSwitcher({
+        viewport,
+        layers: {
+          fills: fills.root as unknown as Container,
+          borders: borders.mesh as unknown as Container,
+          troops: troops.root as unknown as Container,
+          capitals: capitals.root,
+        },
+        world,
+      });
+      const lodUnsub = lod.bind();
+      localCleanups.push(lodUnsub);
 
       // Center on world.
       viewport.moveCenter(1800, 900);
