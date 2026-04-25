@@ -7,10 +7,10 @@
  */
 export const SQRT_3 = Math.sqrt(3);
 
-/** Convert axial (q, r) → world px (size already in px). */
+/** Convert axial (q, r) → world px (size already in px). Y inverted to match screen-down convention. */
 export function axialToPx(q: number, r: number, size: number): [number, number] {
   const x = size * 1.5 * q;
-  const y = size * SQRT_3 * (r + q / 2);
+  const y = -size * SQRT_3 * (r + q / 2);
   return [x, y];
 }
 

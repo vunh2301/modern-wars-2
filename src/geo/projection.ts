@@ -25,9 +25,9 @@ export function mercatorToLngLat(x: number, y: number): [number, number] {
   return [lng, lat];
 }
 
-/** Mercator radians → world pixels (centered at 0,0). */
+/** Mercator radians → world pixels (centered at 0,0). Y negated for screen-down convention. */
 export function mercatorToWorldPx(mx: number, my: number): [number, number] {
-  return [mx * WORLD_SCALE_PX, my * WORLD_SCALE_PX];
+  return [mx * WORLD_SCALE_PX, -my * WORLD_SCALE_PX];
 }
 
 /** km → world pixels (used for hex sizing). */
@@ -35,18 +35,21 @@ export function kmToWorldPx(km: number): number {
   return (km / EARTH_R_KM) * WORLD_SCALE_PX;
 }
 
-/** World total bounds in pixels (Mercator clamped at ±MAX_LAT). */
+/** World total bounds in pixels (Mercator clamped at ±MAX_LAT). Y inverted for screen-down. */
 export function worldBoundsPx(): { minX: number; minY: number; maxX: number; maxY: number; width: number; height: number } {
   const minX = -Math.PI * WORLD_SCALE_PX;
   const maxX = Math.PI * WORLD_SCALE_PX;
-  const [, yMin] = lngLatToMercator(0, -MAX_LAT);
-  const [, yMax] = lngLatToMercator(0, MAX_LAT);
+  const [, ySouth] = lngLatToMercator(0, -MAX_LAT); // negative
+  const [, yNorth] = lngLatToMercator(0, MAX_LAT);  // positive
+  // Screen Y down → north (positive y_mercator) maps to negative screen Y.
+  const minY = -yNorth * WORLD_SCALE_PX;
+  const maxY = -ySouth * WORLD_SCALE_PX;
   return {
     minX,
     maxX,
-    minY: yMin * WORLD_SCALE_PX,
-    maxY: yMax * WORLD_SCALE_PX,
+    minY,
+    maxY,
     width: maxX - minX,
-    height: (yMax - yMin) * WORLD_SCALE_PX,
+    height: maxY - minY,
   };
 }

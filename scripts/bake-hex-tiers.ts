@@ -203,26 +203,65 @@ function loadCountries(geojsonPath: string): Country[] {
 }
 
 // ─── Build rbush index over country polygon bboxes (per ring) ──────────────
+/**
+ * Antimeridian-aware bbox builder. Russia, USA Aleutian, Fiji, NZ, Kiribati
+ * have outer rings crossing 180° → naive bbox spans entire world (-180..180)
+ * → rbush returns them as candidate for every ocean tile → ray-cast PiP false
+ * positives → ocean fills with country color.
+ *
+ * Fix: detect antimeridian crossing (any edge with |lng diff| > 180°). If
+ * crossing, build TWO bboxes — one for each side of the antimeridian —
+ * by re-projecting western vertices to lng+360 space, computing bbox there,
+ * then emitting two rbush items (one normal, one shifted).
+ */
 function buildPolyBush(countries: Country[]): RBush<PolyBushItem> {
   const bush = new RBush<PolyBushItem>(16);
   const items: PolyBushItem[] = [];
   for (const c of countries) {
     for (let pIdx = 0; pIdx < c.multipoly.length; pIdx++) {
       const ring = c.multipoly[pIdx]?.[0];
-      if (!ring) continue;
-      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-      for (const [x, y] of ring) {
-        if (x < minX) minX = x;
-        if (x > maxX) maxX = x;
-        if (y < minY) minY = y;
-        if (y > maxY) maxY = y;
+      if (!ring || ring.length < 3) continue;
+
+      // Detect antimeridian crossing.
+      let crosses = false;
+      for (let i = 1; i < ring.length; i++) {
+        const dx = Math.abs(ring[i]![0] - ring[i - 1]![0]);
+        if (dx > 180) { crosses = true; break; }
       }
-      items.push({
-        minX, minY, maxX, maxY,
-        countryId: c.id,
-        ringIdx: 0,
-        polyIdx: pIdx,
-      });
+
+      if (!crosses) {
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        for (const [x, y] of ring) {
+          if (x < minX) minX = x;
+          if (x > maxX) maxX = x;
+          if (y < minY) minY = y;
+          if (y > maxY) maxY = y;
+        }
+        items.push({ minX, minY, maxX, maxY, countryId: c.id, ringIdx: 0, polyIdx: pIdx });
+      } else {
+        // Build "east" bbox using lngs as-is but ignoring west-of-antimeridian; and "west" bbox vice versa.
+        // East piece: vertices with lng > 0 (Eastern hemisphere portion).
+        let eMinX = Infinity, eMinY = Infinity, eMaxX = -Infinity, eMaxY = -Infinity;
+        let wMinX = Infinity, wMinY = Infinity, wMaxX = -Infinity, wMaxY = -Infinity;
+        let hasE = false, hasW = false;
+        for (const [x, y] of ring) {
+          if (x >= 0) {
+            hasE = true;
+            if (x < eMinX) eMinX = x;
+            if (x > eMaxX) eMaxX = x;
+            if (y < eMinY) eMinY = y;
+            if (y > eMaxY) eMaxY = y;
+          } else {
+            hasW = true;
+            if (x < wMinX) wMinX = x;
+            if (x > wMaxX) wMaxX = x;
+            if (y < wMinY) wMinY = y;
+            if (y > wMaxY) wMaxY = y;
+          }
+        }
+        if (hasE) items.push({ minX: eMinX, minY: eMinY, maxX: eMaxX, maxY: eMaxY, countryId: c.id, ringIdx: 0, polyIdx: pIdx });
+        if (hasW) items.push({ minX: wMinX, minY: wMinY, maxX: wMaxX, maxY: wMaxY, countryId: c.id, ringIdx: 0, polyIdx: pIdx });
+      }
     }
   }
   bush.load(items);

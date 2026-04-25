@@ -43,11 +43,10 @@ export function fitViewportToWorld(viewport: Viewport, app: Application): void {
   const fitScaleY = app.screen.height / bounds.height;
   const fitScale = Math.min(fitScaleX, fitScaleY);
   viewport.setZoom(fitScale * 1.5, true);
-  // Center at (lng=0°, lat=20°N) → Mercator px
-  // Mercator x for lng=0 = 0
+  // Center at (lng=0°, lat=20°N) → world px (Y inverted for screen-down).
   // Mercator y for lat=20° = log(tan(π/4 + 20°·π/360)) ≈ 0.357 rad
-  // World px y = 0.357 * 1024 ≈ 366
-  viewport.moveCenter(0, 0.357 * 1024);
+  // World px y = -0.357 * 1024 ≈ -366 (north = up = negative screen Y)
+  viewport.moveCenter(0, -0.357 * 1024);
 }
 
 export function resizeViewport(app: Application, viewport: Viewport): void {
