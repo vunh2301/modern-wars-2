@@ -88,7 +88,7 @@ export function PixiRoot(): JSX.Element {
       });
 
       // Start sim runner driven by Pixi ticker. Section 8.5 fixed-step accumulator.
-      const sim = createSimRunner({ meta: world.countries });
+      const sim = createSimRunner({ world });
       const onTickerFrame = (): void => {
         sim.step(app.ticker.deltaMS);
       };

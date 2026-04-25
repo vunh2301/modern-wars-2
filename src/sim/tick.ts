@@ -5,12 +5,31 @@
  * - Speed scales game clock at the accumulator (NOT inside subsystems).
  * - Spiral-of-death guard: max 8 sim ticks per render frame in gameplay mode.
  *   Bench mode disables the cap (Section 8.5 rule 6).
+ *
+ * Per-tick pipeline (Phase 3):
+ *   1. TickContext snapshot (Section 4.2 race-free helper for combat).
+ *   2. AI planner emits new battles (Section 6.2 sub-batched stagger).
+ *   3. Resolve every active battle (Section 6.1 damage formulas + capture).
+ *   4. Reinforcement for all owned countries.
+ *   5. Re-derive sides + bump version.
+ *   6. Win-check (Section 6.3 + tie-break TIE_BREAK_TICKS).
+ *   7. Advance tick + flush stats.
  */
-import type { CountryMeta, GameSpeed, GameState } from '../data/types';
+import type {
+  CountryMeta,
+  CountryRuntime,
+  GameSpeed,
+  GameState,
+  WorldData,
+} from '../data/types';
 import { useGameStore } from '../state/store';
 import { beginTick } from './tickContext';
 import { reinforceTick } from './reinforce';
 import { deriveSides } from './sidesDerive';
+import { computeBattleIntensity, resolveBattleTick } from './combat';
+import { planAiBattles } from './ai';
+import { checkWinner } from './winCheck';
+import { createRng } from '../utils/rng';
 import { emit } from '../telemetry/emit';
 
 const SIM_HZ = 4;
@@ -26,13 +45,16 @@ export type SimRunner = {
 };
 
 export type SimRunnerOptions = {
-  meta: Record<string, CountryMeta>;
+  world: WorldData;
   /** Disable spiral cap (bench mode only). Section 8.5 rule 6. */
   uncapped?: boolean;
 };
 
 export function createSimRunner(opts: SimRunnerOptions): SimRunner {
   let accumulator = 0;
+  // Per-runner RNG seeded from store; re-seeded if store rngSeed changes.
+  let lastSeed = useGameStore.getState().rngSeed;
+  let rng = createRng(lastSeed);
 
   const reset = (): void => {
     accumulator = 0;
@@ -41,12 +63,19 @@ export function createSimRunner(opts: SimRunnerOptions): SimRunner {
   const step = (dtRealMs: number): number => {
     const state = useGameStore.getState();
     if (state.paused) {
-      // Drain accumulator gradually so unpausing doesn't burst N ticks.
       accumulator = 0;
       return 0;
     }
+    if (state.winner !== null) {
+      return 0; // game over
+    }
 
-    // Speed scales game-time only at the accumulator (Section 6.1 speed rule).
+    // Re-seed RNG if seed changed (Settings panel allows seed override).
+    if (state.rngSeed !== lastSeed) {
+      lastSeed = state.rngSeed;
+      rng = createRng(lastSeed);
+    }
+
     const speed: GameSpeed = state.speed;
     accumulator += dtRealMs * speed;
 
@@ -56,12 +85,11 @@ export function createSimRunner(opts: SimRunnerOptions): SimRunner {
 
     while (accumulator >= SIM_DT_MS) {
       if (executed >= cap) {
-        // Drop excess (telemetry event, Section 14.4).
         dropped = Math.floor(accumulator / SIM_DT_MS);
         accumulator = 0;
         break;
       }
-      runOneTick(opts.meta);
+      runOneTick(opts.world, rng);
       accumulator -= SIM_DT_MS;
       executed += 1;
     }
@@ -77,16 +105,62 @@ export function createSimRunner(opts: SimRunnerOptions): SimRunner {
   return { step, reset };
 }
 
-function runOneTick(meta: Record<string, CountryMeta>): void {
+function runOneTick(world: WorldData, rng: () => number): void {
   const store = useGameStore.getState();
   const { sides, tick, battles } = store;
+  const meta = world.countries;
 
   // 1) TickContext snapshot (Section 4.2)
   const ctx = beginTick({ sides, battles, tick });
-  void ctx; // Phase 3 combat will read ctx; not used in Phase 2
 
-  // 2) Reinforce (Section 6.1)
+  // 2) AI plan
+  const ai = planAiBattles({
+    countries: store.countries,
+    meta,
+    adjacency: world.adjacency,
+    edgeType: world.edgeType,
+    sides,
+    battles,
+    tick,
+  });
+  for (const b of ai.newBattles) store.addBattle(b);
+
+  // 3) Combat — resolve all battles
+  let damageThisTick = 0;
+  let capturesThisTick = 0;
+  const battlesAfterAi = useGameStore.getState().battles;
+  const toRemove: string[] = [];
+
   store.mutateCountries((draft) => {
+    for (const battle of battlesAfterAi) {
+      const attacker = draft[battle.attacker];
+      const defender = draft[battle.defender];
+      if (!attacker || !defender) {
+        toRemove.push(battle.id);
+        continue;
+      }
+      // If owners changed (defender captured by other battle in same tick),
+      // the snapshot still has previous owner — but resolution uses live state.
+      if (attacker.ownerId === defender.ownerId) {
+        toRemove.push(battle.id);
+        continue;
+      }
+      const res = resolveBattleTick({ battle, attacker, defender, ctx, rng });
+      damageThisTick += res.damageToAttacker + res.damageToDefender;
+      battle.intensity = computeBattleIntensity(attacker.troops, defender.troops);
+      if (res.captured) {
+        capturesThisTick += 1;
+        toRemove.push(battle.id);
+      } else if (res.mutualKill) {
+        toRemove.push(battle.id);
+      }
+    }
+  });
+
+  for (const id of toRemove) store.removeBattle(id);
+
+  // 4) Reinforcement (Section 6.1)
+  store.mutateCountries((draft: Record<string, CountryRuntime>) => {
     reinforceTick({
       countries: draft,
       meta,
@@ -96,12 +170,16 @@ function runOneTick(meta: Record<string, CountryMeta>): void {
     });
   });
 
-  // 3) Re-derive sides + bump version
+  // 5) Re-derive sides
   const next = deriveSides(useGameStore.getState().countries, meta);
   store.setSides(next);
 
-  // 4) Advance tick + reset stats accumulators per spec
-  store.endTick({});
+  // 6) Win check
+  const winner = checkWinner(next, tick + 1);
+  if (winner) store.setWinner(winner);
+
+  // 7) End tick + stats
+  store.endTick({ damageAdded: damageThisTick, captureCount: capturesThisTick });
 }
 
 /** Test helper — exposed for unit tests. */
@@ -111,3 +189,6 @@ export const _internals = { SIM_DT_MS, SIM_DT_SECONDS, SPIRAL_CAP_GAMEPLAY };
 export function getSimState(): GameState {
   return useGameStore.getState();
 }
+
+/** Re-export meta for downstream phases. */
+export type { CountryMeta };
