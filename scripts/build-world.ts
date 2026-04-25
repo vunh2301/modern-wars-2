@@ -392,18 +392,127 @@ function main() {
     adjMap.get(b)!.add(a);
   }
 
-  // Sea-lane Stage A (manual)
-  let seaEdges = 0;
+  // Sea-lane Stage A — manual seeds (SPEC Section 4.5).
+  const seaEdgesOut: Array<{ from: string; to: string; source: 'manual' | 'auto' }> = [];
   for (const e of seaLanesManual.edges) {
     if (!codeSet.has(e.from) || !codeSet.has(e.to)) {
       console.warn(`[build-world] skip sea-lane ${e.from}↔${e.to}: missing country`);
       continue;
     }
+    if (adjMap.get(e.from)!.has(e.to)) continue;
     adjMap.get(e.from)!.add(e.to);
     adjMap.get(e.to)!.add(e.from);
-    seaEdges++;
+    seaEdgesOut.push({ from: e.from, to: e.to, source: 'manual' });
   }
-  console.info(`[build-world] sea-lane edges (manual): ${seaEdges}`);
+  console.info(`[build-world] sea-lane edges (manual): ${seaEdgesOut.length}`);
+
+  // Helper: connected components on adjMap.
+  const findComponents = (): string[][] => {
+    const seen = new Set<string>();
+    const comps: string[][] = [];
+    for (const c of countries) {
+      if (seen.has(c.code)) continue;
+      const stack: string[] = [c.code];
+      const comp: string[] = [];
+      while (stack.length) {
+        const x = stack.pop()!;
+        if (seen.has(x)) continue;
+        seen.add(x);
+        comp.push(x);
+        for (const y of adjMap.get(x) ?? []) if (!seen.has(y)) stack.push(y);
+      }
+      comps.push(comp);
+    }
+    return comps;
+  };
+
+  // Centroid lng/lat lookup (reverse equirectangular from projected px).
+  const centroidLngLat = new Map<string, [number, number]>();
+  for (const c of countries) {
+    const lng = (c.centroid[0] / WORLD_W) * 360 - 180;
+    const lat = 90 - (c.centroid[1] / WORLD_H) * 180;
+    centroidLngLat.set(c.code, [lng, lat]);
+  }
+  const greatCircleKm = (a: [number, number], b: [number, number]): number => {
+    const R = 6371;
+    const toRad = (d: number) => (d * Math.PI) / 180;
+    const dLat = toRad(b[1] - a[1]);
+    const dLng = toRad(b[0] - a[0]);
+    const lat1 = toRad(a[1]);
+    const lat2 = toRad(b[1]);
+    const x =
+      Math.sin(dLat / 2) ** 2 + Math.sin(dLng / 2) ** 2 * Math.cos(lat1) * Math.cos(lat2);
+    return 2 * R * Math.asin(Math.sqrt(x));
+  };
+
+  // Stage B — K=1 nearest ≤ 2500km per isolated MEMBER (SPEC Section 4.5 step 3).
+  // Tightened from K=3 because Stage A already provides dense Pacific/Atlantic
+  // bridges; K=3 here would push Stage B alone past the 80-edge sanity cap.
+  let comps = findComponents();
+  if (comps.length > 1) {
+    comps.sort((a, b) => b.length - a.length);
+    for (let ci = 1; ci < comps.length; ci++) {
+      const comp = comps[ci]!;
+      for (const a of comp) {
+        const ca = centroidLngLat.get(a);
+        if (!ca) continue;
+        let best: { b: string; km: number } | null = null;
+        for (const c of countries) {
+          if (c.code === a || comp.includes(c.code)) continue;
+          const cb = centroidLngLat.get(c.code);
+          if (!cb) continue;
+          const km = greatCircleKm(ca, cb);
+          if (km <= 2500 && (!best || km < best.km)) best = { b: c.code, km };
+        }
+        if (best && !adjMap.get(a)!.has(best.b)) {
+          adjMap.get(a)!.add(best.b);
+          adjMap.get(best.b)!.add(a);
+          const from = a < best.b ? a : best.b;
+          const to = a < best.b ? best.b : a;
+          seaEdgesOut.push({ from, to, source: 'auto' });
+        }
+      }
+    }
+  }
+  console.info(`[build-world] sea-lane after Stage B: ${seaEdgesOut.length}`);
+
+  // Stage C — bounded force-add ≤ 4000km until connected (SPEC Section 4.5 step 4).
+  comps = findComponents();
+  let stageCSafety = 100;
+  while (comps.length > 1 && stageCSafety-- > 0) {
+    comps.sort((a, b) => b.length - a.length);
+    const tail = comps[1]!;
+    let best: { a: string; b: string; km: number } | null = null;
+    for (const a of tail) {
+      const ca = centroidLngLat.get(a);
+      if (!ca) continue;
+      for (const c of countries) {
+        if (tail.includes(c.code)) continue;
+        const cb = centroidLngLat.get(c.code);
+        if (!cb) continue;
+        const km = greatCircleKm(ca, cb);
+        if (km <= 4000 && (!best || km < best.km)) best = { a, b: c.code, km };
+      }
+    }
+    if (!best) {
+      console.warn(
+        `[build-world] Stage C cannot bridge component ${tail.slice(0, 4).join(',')}… within 4000km. Add manual edge.`,
+      );
+      break;
+    }
+    adjMap.get(best.a)!.add(best.b);
+    adjMap.get(best.b)!.add(best.a);
+    const from = best.a < best.b ? best.a : best.b;
+    const to = best.a < best.b ? best.b : best.a;
+    seaEdgesOut.push({ from, to, source: 'auto' });
+    comps = findComponents();
+  }
+  console.info(`[build-world] sea-lane total edges: ${seaEdgesOut.length}`);
+  if (seaEdgesOut.length > 80) {
+    console.warn(
+      `[build-world] sea-lane count ${seaEdgesOut.length} > 80 cap; consider tightening Stage B distance.`,
+    );
+  }
 
   // 4-color
   const colors = fourColor(countries.map(c => c.code), adjMap);
@@ -464,9 +573,10 @@ function main() {
       edgesOut.push([a, b, 'land', 'auto']);
     }
   }
-  for (const e of seaLanesManual.edges) {
+  // Emit ALL sea edges (Stage A manual + Stage B/C auto-computed).
+  for (const e of seaEdgesOut) {
     if (codeSet.has(e.from) && codeSet.has(e.to)) {
-      edgesOut.push([e.from, e.to, 'sea', 'manual']);
+      edgesOut.push([e.from, e.to, 'sea', e.source]);
     }
   }
 
