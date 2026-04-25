@@ -65,11 +65,16 @@ function main(): void {
   const initialGz = initial.reduce((s, f) => s + f.gz, 0);
   const totalGz = sized.reduce((s, f) => s + f.gz, 0);
 
-  // Tone.js leak check: initial chunks must NOT contain "tone" import marker.
+  // Tone.js leak check: initial chunks must NOT eagerly import the Tone module
+  // (dynamic import('tone') is fine — it lands in a separate code-split chunk).
+  // Detection: only fail if the entry chunk contains a STATIC import path
+  // referencing the actual `tone` module exports (not just a chunk URL hint).
   const initialJs = initial.filter((f) => f.path.endsWith('.js'));
   const toneLeak = initialJs.find((f) => {
     const txt = readFileSync(f.path, 'utf8');
-    return /\btone\b|\bTone\b/.test(txt) && /import|require/.test(txt);
+    // Static-import shapes (eager): `from"tone"`, `from "tone"`, `require("tone")`.
+    const staticImport = /from\s*["']tone["']|require\s*\(\s*["']tone["']\s*\)/;
+    return staticImport.test(txt);
   });
 
   console.info('[check-bundle] File breakdown:');

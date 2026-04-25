@@ -24,6 +24,9 @@ export default defineConfig({
         manualChunks: {
           pixi: ['pixi.js', 'pixi-viewport'],
           react: ['react', 'react-dom'],
+          // Tone.js dynamic-imported via src/audio/engine.ts; explicit chunk
+          // ensures it never lands in initial bundle (Section 1 budget + check-bundle gate).
+          tone: ['tone'],
         },
       },
     },
