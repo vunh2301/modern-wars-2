@@ -1,8 +1,0 @@
-{
-  "schemaVersion": 1,
-  "_note": "ISO_A2 codes EXCLUDED from world data (Section 4.3 step 2).",
-  "exclude": ["AQ"],
-  "_excludeReason": {
-    "AQ": "Antarctica — uninhabited, gameplay-irrelevant"
-  }
-}

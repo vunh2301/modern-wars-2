@@ -1,70 +1,39 @@
-# Modern Wars 2.0
+# Modern Wars — Hex Map Renderer
 
-Risk-style real-time strategy map game — Spectator/AI mode.
+> **Reset to v1.0 spec.** Phase 1 only: render hex grid world map. **Không có gameplay.**
 
-177 quốc gia (Natural Earth 50m), real-time tick-based combat, sea-lane adjacency, deterministic sim, target 60fps trên iPhone 12 Safari.
+Spec: [docs/SPEC.md](./docs/SPEC.md)
 
 ## Status
 
-**Spec phase** — implementation chưa bắt đầu. See [docs/SPEC.md](./docs/SPEC.md) (~1800 lines, 20 sections, scored 9.62 Opus / 9.61 Codex).
+🟡 **Phase 0 / 5** — Reset commit. Code wipe completed; new architecture per hex-grid spec started fresh.
 
 ## Stack
 
-- Vite 7 + TypeScript strict
-- React 18 (HUD only)
-- Pixi.js 8.6.6 (vanilla, no react-pixi)
-- Zustand + immer (state)
-- Tone.js 15 (audio, lazy-loaded)
-- seedrandom (deterministic PRNG)
+- Vite ≥ 7 + TypeScript ≥ 5.4
+- Pixi.js 8.6.6 (vanilla, exact pin)
+- pixi-viewport 6 (pinch zoom + pan)
+- honeycomb-grid 4 (flat-top axial hex math)
+- rbush 4 (build-time spatial index)
+- Brotli compressed binary tier files
+- Service Worker + IndexedDB caching
 
-## Acceptance gates
+## Target
 
-- 60fps sustained @ zoom 1× idle, p95 frame ≤ 18.2ms với 50+ battles
-- Boot ≤ 1500ms iPhone 12 Safari
-- Bundle ≤ 350KB gz initial / ≤ 500KB gz total app
-- Deterministic sim: 3-run hash identical (CI gate)
+- 60 FPS p95 trên iPhone 13 Pro Max Safari
+- Boot < 1500ms cold, < 300ms cached
+- 100% quốc gia (kể cả Vatican) hiện diện
+- Pinch zoom 1× → 32× smooth
 
-## Visual style
+## Out of scope (Phase 1)
 
-Terminal/sci-fi vibe — dark cyan/magenta accents, JetBrains Mono, scanlines, glow effects (Section 20).
+❌ NO combat / battles / AI / corps / cities / HUD / audio / gameplay logic.
 
-## Development phases (18-26h total)
+Spec Section 15 lists negative list explicitly. Phase 2 gameplay TBD sau Phase 1 done.
 
-| Phase | Scope | Time |
-|---|---|---|
-| 0 | Project bootstrap (Vite + TS + Pixi + ESLint + palette) | 1h |
-| 1a | Build-time world data pipeline | 2h |
-| 1b | Boot loader + render | 2h |
-| 2 | State + sim loop | 2h |
-| 3 | Combat core | 3h |
-| 4 | UI + leaderboard | 1.5h |
-| 5 | Audio + game feel | 2h |
-| 6a | LOD implementation | 2h |
-| 6b | Benchmark + telemetry | 2h |
-| 7 | Optimization (conditional) | 2-6h |
-| 8 | Resilience hardening | 1.5h |
-| 9 | Vercel deployment | 1h |
+## Deploy
 
-## Deploy to Vercel
-
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fvunh2301%2Fmodern-wars-2)
-
-**1-click setup:**
-1. Click button trên (login Vercel nếu chưa).
-2. Vercel detect framework = **Other** (không có package.json yet).
-3. **Skip Build & Deploy now** — preview hiển thị README + spec link. Production deploy sẽ tự trigger sau Phase 0 (Vite app committed).
-4. Vercel auto-deploy mỗi push `main` (production) + branches/PRs (preview URL).
-
-Alternative: GitHub Pages — see [Section 19.3](./docs/SPEC.md#193-alternative-github-pages).
-
-## Local dev (after Phase 0)
-
-```bash
-npm install
-npm run build:world  # pre-compute world data
-npm run dev          # http://localhost:5173
-npm run build        # production build
-```
+Vercel auto-deploy `main`. URL: https://modern-wars-2.vercel.app/ (TBC nếu giữ domain hay mới).
 
 ## License
 
