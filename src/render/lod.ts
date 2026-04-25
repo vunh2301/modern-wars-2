@@ -57,10 +57,13 @@ export function createLodSwitcher(params: {
     tier = next;
 
     // Tier-specific visibility
+    // NOTE: Fills + borders ALWAYS visible (Justin feedback 2026-04-25 — country
+    // fills are the primary visual identity of the game). Tier 0 reduces detail
+    // by hiding particles + capitals only; Tier 2 turns everything on.
     if (next === 0) {
-      layers.fills.visible = false;
-      layers.borders.visible = false;
-      layers.troops.visible = true;
+      layers.fills.visible = true;       // keep fills visible at all zoom
+      layers.borders.visible = true;
+      layers.troops.visible = false;     // hide troop particles when zoomed-out
       layers.capitals.visible = false;
     } else if (next === 1) {
       layers.fills.visible = true;
@@ -68,7 +71,7 @@ export function createLodSwitcher(params: {
       layers.troops.visible = true;
       layers.capitals.visible = true;
     } else {
-      // tier 2
+      // tier 2 — all visible, lazy-loaded tier-2 polygons take effect when ready
       layers.fills.visible = true;
       layers.borders.visible = true;
       layers.troops.visible = true;
