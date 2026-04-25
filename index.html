@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no">
+<meta name="theme-color" content="#000814">
+<title>Modern Wars 2.0 — Under Construction</title>
+<style>
+  :root {
+    --bg-void: #000814;
+    --bg-panel: #001220;
+    --bg-panel-hover: #001a2e;
+    --cyan: #00e5ff;
+    --cyan-dim: #0088aa;
+    --magenta: #ff00aa;
+    --amber: #ffb800;
+    --emerald: #00ff88;
+    --text-primary: #e0f7ff;
+    --text-muted: #7a9eb8;
+    --text-dim: #3d5a73;
+  }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    background: var(--bg-void);
+    color: var(--text-primary);
+    font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+    min-height: 100vh;
+    line-height: 1.5;
+    letter-spacing: 0.02em;
+    overflow-x: hidden;
+  }
+  body {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem 1rem;
+    position: relative;
+  }
+  /* Scanline overlay (Section 20.3) */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background: repeating-linear-gradient(0deg, transparent 0px, transparent 1px, rgba(0, 229, 255, 0.04) 2px, transparent 3px);
+    pointer-events: none;
+    z-index: 1;
+  }
+  /* Vignette */
+  body::after {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background: radial-gradient(circle at center, transparent 40%, rgba(0, 0, 0, 0.6) 100%);
+    pointer-events: none;
+    z-index: 1;
+  }
+  .container {
+    max-width: 720px;
+    width: 100%;
+    position: relative;
+    z-index: 2;
+  }
+  .logo {
+    font-size: clamp(2rem, 8vw, 3.5rem);
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    color: var(--cyan);
+    text-shadow: 0 0 12px var(--cyan), 0 0 24px rgba(0, 229, 255, 0.4);
+    text-align: center;
+    margin-bottom: 0.5rem;
+    text-transform: uppercase;
+  }
+  .logo .accent { color: var(--magenta); text-shadow: 0 0 12px var(--magenta); }
+  .tagline {
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    letter-spacing: 0.2em;
+    margin-bottom: 3rem;
+  }
+  .status-card {
+    border: 1px solid var(--cyan-dim);
+    background: var(--bg-panel);
+    padding: 1.5rem;
+    margin-bottom: 1.5rem;
+    box-shadow: 0 0 20px rgba(0, 229, 255, 0.1);
+    position: relative;
+  }
+  .status-card::before {
+    content: '◆';
+    position: absolute;
+    top: -8px;
+    left: 16px;
+    color: var(--cyan);
+    background: var(--bg-void);
+    padding: 0 6px;
+    font-size: 0.75rem;
+  }
+  .status-label {
+    font-size: 0.7rem;
+    color: var(--cyan);
+    text-transform: uppercase;
+    letter-spacing: 0.2em;
+    margin-bottom: 0.75rem;
+  }
+  .status-value {
+    font-size: 1.1rem;
+    color: var(--text-primary);
+    margin-bottom: 0.5rem;
+  }
+  .blink {
+    animation: blink 1.4s steps(2, end) infinite;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+  .meta-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 1rem;
+    margin: 1rem 0;
+  }
+  .meta-item {
+    border-left: 2px solid var(--cyan-dim);
+    padding-left: 0.75rem;
+  }
+  .meta-key {
+    font-size: 0.7rem;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.15em;
+  }
+  .meta-val {
+    font-size: 0.95rem;
+    color: var(--amber);
+    font-weight: 600;
+  }
+  .meta-val.cyan { color: var(--cyan); }
+  .meta-val.emerald { color: var(--emerald); }
+  .links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    justify-content: center;
+    margin-top: 2rem;
+  }
+  .btn {
+    display: inline-block;
+    padding: 0.65rem 1.25rem;
+    border: 1px solid var(--cyan);
+    color: var(--cyan);
+    text-decoration: none;
+    font-family: inherit;
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    letter-spacing: 0.15em;
+    transition: all 0.15s ease;
+    background: transparent;
+  }
+  .btn:hover, .btn:focus {
+    background: var(--cyan);
+    color: var(--bg-void);
+    box-shadow: 0 0 16px var(--cyan);
+    outline: none;
+  }
+  .btn.secondary {
+    border-color: var(--text-dim);
+    color: var(--text-muted);
+  }
+  .btn.secondary:hover {
+    background: var(--text-dim);
+    color: var(--bg-void);
+    box-shadow: 0 0 12px var(--text-dim);
+  }
+  .ascii-art {
+    font-size: 0.55rem;
+    line-height: 1;
+    color: var(--cyan-dim);
+    text-align: center;
+    margin: 2rem 0;
+    white-space: pre;
+    overflow-x: auto;
+    user-select: none;
+    opacity: 0.7;
+  }
+  @media (max-width: 480px) {
+    .ascii-art { font-size: 0.45rem; }
+  }
+  .footer {
+    margin-top: 3rem;
+    text-align: center;
+    color: var(--text-dim);
+    font-size: 0.75rem;
+    letter-spacing: 0.15em;
+  }
+  .footer a { color: var(--cyan-dim); text-decoration: none; }
+  .footer a:hover { color: var(--cyan); }
+  /* Reduced motion */
+  @media (prefers-reduced-motion: reduce) {
+    .blink { animation: none; }
+    body::before { display: none; }
+  }
+</style>
+</head>
+<body>
+<main class="container">
+  <h1 class="logo">MODERN<span class="accent">_</span>WARS<span class="accent">2</span></h1>
+  <p class="tagline">Risk-Style · Real-Time · 177 Nations · 60FPS Target</p>
+
+  <section class="status-card">
+    <div class="status-label">[ SYSTEM STATUS ]</div>
+    <div class="status-value">PHASE 0 · BOOT INITIALIZATION <span class="blink">_</span></div>
+
+    <div class="meta-grid">
+      <div class="meta-item">
+        <div class="meta-key">Spec Score</div>
+        <div class="meta-val emerald">9.62 / 10</div>
+      </div>
+      <div class="meta-item">
+        <div class="meta-key">Reviewers</div>
+        <div class="meta-val cyan">OPUS · CODEX</div>
+      </div>
+      <div class="meta-item">
+        <div class="meta-key">Sections</div>
+        <div class="meta-val">20 · 1855 LINES</div>
+      </div>
+      <div class="meta-item">
+        <div class="meta-key">Target</div>
+        <div class="meta-val">iPHONE 12 SAFARI</div>
+      </div>
+      <div class="meta-item">
+        <div class="meta-key">Stack</div>
+        <div class="meta-val cyan">VITE · TS · PIXI v8</div>
+      </div>
+      <div class="meta-item">
+        <div class="meta-key">Mode</div>
+        <div class="meta-val">SPECTATOR / AI ONLY</div>
+      </div>
+    </div>
+  </section>
+
+  <pre class="ascii-art">
+   ▄████  ██▓     ▒█████   ▄▄▄▄    ▄▄▄       ██▓
+  ██▒ ▀█▒▓██▒    ▒██▒  ██▒▓█████▄ ▒████▄    ▓██▒
+ ▒██░▄▄▄░▒██░    ▒██░  ██▒▒██▒ ▄██▒██  ▀█▄  ▒██░
+ ░▓█  ██▓▒██░    ▒██   ██░▒██░█▀  ░██▄▄▄▄██ ▒██░
+ ░▒▓███▀▒░██████▒░ ████▓▒░░▓█  ▀█▓ ▓█   ▓██▒░██████▒
+  ░▒   ▒ ░ ▒░▓  ░░ ▒░▒░▒░ ░▒▓███▀▒ ▒▒   ▓▒█░░ ▒░▓  ░
+   ░   ░ ░ ░ ▒  ░  ░ ▒ ▒░ ▒░▒   ░   ▒   ▒▒ ░░ ░ ▒  ░
+ ░ ░   ░   ░ ░   ░ ░ ░ ▒   ░    ░   ░   ▒     ░ ░
+       ░     ░  ░    ░ ░   ░            ░  ░    ░  ░
+                                ░
+  </pre>
+
+  <div class="links">
+    <a class="btn" href="https://github.com/vunh2301/modern-wars-2/blob/main/docs/SPEC.md">▶ READ SPEC</a>
+    <a class="btn" href="https://github.com/vunh2301/modern-wars-2">◉ GITHUB</a>
+    <a class="btn secondary" href="https://github.com/vunh2301/modern-wars-2/blob/main/README.md">README</a>
+  </div>
+
+  <div class="footer">
+    <p>// AWAITING PHASE 0 EXECUTION · ETA 18-26H BUILD</p>
+    <p style="margin-top: 0.5rem;">Powered by <a href="https://anthropic.com/claude-code">Claude Code</a></p>
+  </div>
+</main>
+</body>
+</html>
