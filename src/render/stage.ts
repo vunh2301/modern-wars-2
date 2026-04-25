@@ -5,7 +5,11 @@
  * DPR cap 2 for mobile perf. CullerPlugin will be registered when hex layer
  * lands (Phase 3).
  */
-import { Application, Color } from 'pixi.js';
+import { Application, Color, CullerPlugin, extensions } from 'pixi.js';
+
+// Register Pixi v8 CullerPlugin so containers with cullable=true + cullArea
+// get auto-skipped when offscreen. Required for chunked hex rendering perf.
+extensions.add(CullerPlugin);
 
 const OCEAN_BG = 0x040d18;
 

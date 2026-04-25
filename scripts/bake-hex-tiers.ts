@@ -109,7 +109,7 @@ function axialToMercator(q: number, r: number, sizeRad: number): [number, number
 }
 
 // ─── Point-in-polygon (ray casting) ─────────────────────────────────────────
-function pointInRing(x: number, y: number, ring: LngLat[]): boolean {
+function pointInRingRaw(x: number, y: number, ring: LngLat[]): boolean {
   let inside = false;
   for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
     const a = ring[i]!;
@@ -121,6 +121,25 @@ function pointInRing(x: number, y: number, ring: LngLat[]): boolean {
     }
   }
   return inside;
+}
+
+/**
+ * PiP that handles antimeridian-crossing rings correctly. Justin feedback
+ * 2026-04-26 "alaska, russia bị cắt". When ring spans > 180° in lng,
+ * normalize all vertices + query point to [0, 360) range so the ring is
+ * monotonic and ray-cast works.
+ */
+function pointInRing(x: number, y: number, ring: LngLat[]): boolean {
+  let minLng = Infinity, maxLng = -Infinity;
+  for (const v of ring) {
+    if (v[0] < minLng) minLng = v[0];
+    if (v[0] > maxLng) maxLng = v[0];
+  }
+  if (maxLng - minLng < 180) return pointInRingRaw(x, y, ring);
+  // Wrapping ring — shift negative lngs by +360 so all vertices in [0, 360).
+  const shifted: LngLat[] = ring.map(([lng, lat]) => [lng < 0 ? lng + 360 : lng, lat]);
+  const shiftedX = x < 0 ? x + 360 : x;
+  return pointInRingRaw(shiftedX, y, shifted);
 }
 
 // ─── Centroid (area-weighted on raw lng/lat) ───────────────────────────────

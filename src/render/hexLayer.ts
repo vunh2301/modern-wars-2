@@ -21,6 +21,7 @@ import {
   Graphics,
   Particle,
   ParticleContainer,
+  Rectangle,
   RenderTexture,
   type Application,
 } from 'pixi.js';
@@ -42,19 +43,22 @@ const STROKE_PX = 1.2;
 const STROKE_COLOR = 0x05101a; // near-ocean dark, just enough to read seams
 
 function makeHexTexture(app: Application): RenderTexture {
+  // Per Justin 2026-04-26: bỏ hex stroke vì sub-pixel jitter khi pan tạo flash.
+  // Pure fill — countries identified via color blocks. Country borders as
+  // separate edge layer = future polish.
   const cx = HEX_TEX_W / 2;
   const cy = HEX_TEX_H / 2;
   const points: number[] = [];
   for (let i = 0; i < 6; i++) {
-    // Flat-top hex: vertices at angles 0°, 60°, 120°, 180°, 240°, 300°.
     const angle = (Math.PI / 3) * i;
     points.push(cx + HEX_TEXTURE_SIDE * Math.cos(angle), cy + HEX_TEXTURE_SIDE * Math.sin(angle));
   }
   const g = new Graphics();
   g.poly(points);
   g.fill({ color: 0xffffff, alpha: 1 });
-  g.poly(points);
-  g.stroke({ color: STROKE_COLOR, alpha: 0.85, width: STROKE_PX, alignment: 0.5 });
+  // No stroke — eliminates per-hex grid lines that flickered during pan.
+  void STROKE_PX;
+  void STROKE_COLOR;
 
   const tex = RenderTexture.create({ width: HEX_TEX_W, height: HEX_TEX_H, resolution: 1 });
   app.renderer.render({ container: g, target: tex });
@@ -81,10 +85,9 @@ export function createHexLayer(app: Application): HexLayer {
       dynamicProperties: { position: false, scale: false, rotation: false, color: false },
     });
     pc.label = `tier-${tier.name}`;
-    pc.cullable = false;
+    pc.cullable = false; // single container, GPU offscreen-skip handles it
 
     const hexSizeWorldPx = kmToWorldPx(tier.sizeKm);
-    // Scale = world hex side / texture hex side (preserves flat-top tiling).
     const scale = hexSizeWorldPx / HEX_TEXTURE_SIDE;
 
     const t0 = performance.now();
@@ -92,7 +95,7 @@ export function createHexLayer(app: Application): HexLayer {
       const h = tier.hexes[i]!;
       const [x, y] = axialToPx(h.q, h.r, hexSizeWorldPx);
       const tint = lut[h.countryId] ?? 0x666688;
-      const p = new Particle({
+      pc.addParticle(new Particle({
         texture,
         x,
         y,
@@ -101,13 +104,12 @@ export function createHexLayer(app: Application): HexLayer {
         scaleX: scale,
         scaleY: scale,
         tint,
-      });
-      pc.addParticle(p);
+      }));
     }
     const dt = performance.now() - t0;
-    console.info(`[hex-layer] tier ${tier.name}: ${tier.hexes.length} particles in ${dt.toFixed(0)}ms (hexSizeWorldPx=${hexSizeWorldPx.toFixed(2)}, scale=${scale.toFixed(3)})`);
-
+    console.info(`[hex-layer] tier ${tier.name}: ${tier.hexes.length} particles in ${dt.toFixed(0)}ms`);
     root.addChild(pc);
+    void Rectangle; // chunked path reserved for future when CullerPlugin tuning works
   };
 
   const destroy = (): void => {
