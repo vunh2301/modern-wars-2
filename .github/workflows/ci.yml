@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  pull_request: {}
+  push:
+    branches: [main, dev]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci || npm install
+
+      - name: Lint (ESLint with no-restricted-globals — SPEC Section 8.5)
+        run: npm run lint
+
+      - name: Typecheck (tsc --noEmit, strict mode)
+        run: npm run typecheck
+
+      - name: Build world data (SPEC Section 4.3)
+        run: npm run build:world
+        continue-on-error: true # Phase 0 stub; becomes hard gate from Phase 1a
+
+      - name: Build (Vite)
+        run: npm run build
+
+      - name: Unit tests
+        run: npm run test:unit
+        continue-on-error: true # Phase 0 has no tests yet
+
+      - name: Headless bench Scenario B 3-run hash check (SPEC Section 8.5 acceptance)
+        run: npm run bench:headless
+        continue-on-error: true # Phase 0 stub; becomes hard gate from Phase 3
+
+      - name: Bundle size gate (SPEC Section 19.1, Section 12)
+        run: npm run check:bundle
