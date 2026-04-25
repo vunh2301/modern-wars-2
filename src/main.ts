@@ -60,7 +60,19 @@ async function bootstrap(): Promise<void> {
 
   // LOD switcher (basic) — re-load tier when zoom band changes
   let currentTier = initialTier;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const w = window as any;
+  w.__mwTier = currentTier;
+  w.__mwZoom = viewport.scale.x;
+  w.__mwHexCount = tier.hexes.length;
+
+  const updateHud = (): void => {
+    w.__mwZoom = viewport.scale.x;
+    w.__mwTier = currentTier;
+  };
+
   viewport.on('zoomed', () => {
+    updateHud();
     void (async () => {
       const next = pickTier(viewport.scale.x, availableTiers);
       if (next === currentTier) return;
@@ -68,15 +80,36 @@ async function bootstrap(): Promise<void> {
         const td = await loadTier(next);
         currentTier = next;
         hexLayer.setTier(td, lut);
+        w.__mwTier = currentTier;
+        w.__mwHexCount = td.hexes.length;
         console.info(`[lod] switched to tier ${next} at zoom ${viewport.scale.x.toFixed(2)}`);
       } catch (err) {
         console.warn(`[lod] tier ${next} load failed`, err);
       }
     })();
   });
+  viewport.on('moved', updateHud);
 }
 
 bootstrap().catch((err) => {
   console.error('[boot] fatal:', err);
   document.body.innerHTML = `<pre style="color:#f00;padding:16px;font-family:monospace;">[boot] ${err instanceof Error ? err.message : String(err)}</pre>`;
 });
+
+// Debug HUD: tier + zoom indicator (top-left, small monospace).
+// Enables quick visual confirmation that LOD switcher fires correctly.
+queueMicrotask(() => {
+  const hud = document.createElement('div');
+  hud.style.cssText = 'position:fixed;top:env(safe-area-inset-top, 8px);left:8px;color:#00e5ff;font:11px/1.3 \'JetBrains Mono\',monospace;background:rgba(0,8,20,.7);padding:4px 6px;border:1px solid #0088aa;z-index:9999;pointer-events:none;';
+  hud.textContent = 'tier: — | zoom: —';
+  document.body.appendChild(hud);
+  setInterval(() => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const w = window as any;
+    const z = w.__mwZoom ?? 0;
+    const t = w.__mwTier ?? '—';
+    const h = w.__mwHexCount ?? 0;
+    hud.textContent = `tier: ${t} | zoom: ${z.toFixed(2)}× | hexes: ${h.toLocaleString()}`;
+  }, 250);
+});
+

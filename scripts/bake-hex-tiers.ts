@@ -169,6 +169,10 @@ function multipolyCentroidAndBBox(
 }
 
 // ─── Load countries from a GeoJSON ──────────────────────────────────────────
+// SPEC v1.0-locked Section 1: Antarctica explicit exclude (uninhabited,
+// gameplay-irrelevant, dominates south pole hex grid in purple).
+const EXCLUDE_CODES = new Set(['AQ']);
+
 function loadCountries(geojsonPath: string): Country[] {
   const fc = JSON.parse(readFileSync(geojsonPath, 'utf8')) as { features: Feature[] };
   const seen = new Set<string>();
@@ -178,6 +182,7 @@ function loadCountries(geojsonPath: string): Country[] {
   for (const f of fc.features) {
     const code = f.properties.ISO_A2 || f.properties.ISO_A2_EH || '';
     if (!code || code === '-99' || code.length !== 2) continue;
+    if (EXCLUDE_CODES.has(code)) continue;
     if (seen.has(code)) continue;
     seen.add(code);
 
