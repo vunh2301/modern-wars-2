@@ -22,8 +22,10 @@ export interface TroopsLayer {
   destroy: () => void;
 }
 
-const TROOP_BASE_SIZE = 6;
-const TROOP_DIVISOR = 200;
+// Reduced from 6 → 3 to avoid troop particles obscuring tiny country fills
+// on phone-sized viewports (Justin feedback 2026-04-25).
+const TROOP_BASE_SIZE = 3;
+const TROOP_DIVISOR = 400;
 const FACTION_COLORS = [0x0088aa, 0xaa0066, 0xaa6600, 0x006644, 0x666688];
 
 function colorFor(ownerId: string): number {

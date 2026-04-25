@@ -153,10 +153,14 @@ export function PixiRoot(): JSX.Element {
       const ctxLoss = attachContextLossHandler(app);
       localCleanups.push(() => ctxLoss.detach());
 
-      // Center on world.
+      // Center on world. Force initial zoom that fits world width to 90% screen
+      // (no smaller than 0.6 — keeps countries chunky on phones, prevents tier-0
+      // aggregate hide on narrow viewports per Justin feedback 2026-04-25).
       viewport.moveCenter(1800, 900);
-      viewport.fitWorld(true);
-      viewport.setZoom(Math.max(viewport.scale.x, 0.5), true);
+      const fitScaleX = app.screen.width / 3600;
+      const fitScaleY = app.screen.height / 1800;
+      const fitScale = Math.min(fitScaleX, fitScaleY) * 0.95;
+      viewport.setZoom(Math.max(fitScale, 0.6), true);
 
       // Resize handling (Section 5.4).
       const onResize = (): void => resizeViewport(app, viewport);
