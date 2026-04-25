@@ -1,0 +1,36 @@
+node_modules/
+dist/
+.vite/
+*.log
+
+# Build artifacts
+vendor/_built/
+public/geo/world.*.json
+public/geo/world.polygons.tier*.json
+public/geo/world.borders.tier*.json
+public/geo/adjacency.json
+
+# Bench (committed selectively)
+bench/runs/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# OMC / Claude Code session artifacts (do not commit)
+.omc/artifacts/
+.omc/state/
+.omc/logs/
+.claude/
+
+# Env
+.env
+.env.local
+.env.*.local
+
+# Coverage
+coverage/
+*.lcov
