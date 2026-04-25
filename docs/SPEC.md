@@ -1,8 +1,8 @@
 # Modern Wars — Hex Map Renderer SPEC
 
-> **v1.0** — Phase 1 only: render hex grid world map với pinch-zoom. **Không có gameplay.**
+> **v1.0-locked** — Phase 1 only: render hex grid world map với pinch-zoom. **Không có gameplay.**
 >
-> Scope cực hẹp đã được lock với Justin sau ~10 vòng iteration design lệch hướng.
+> All 7 open questions confirmed by Justin 2026-04-25. Ready for Claude Code execution.
 
 ---
 
@@ -41,10 +41,12 @@ Nếu Claude Code có ý định viết bất kỳ thứ gì trong "OUT OF SCOPE
 
 - Boot → map hiện < 1500 ms (lần load đầu, network 4G); < 300 ms (cached).
 - Pinch zoom từ 1× → 32× không drop frame quá 3 lần liên tiếp.
+- **Initial zoom 1.5× tại center (0°, 20°N)** — nhìn thấy Châu Á + Âu + Bắc Mỹ.
 - Zoom 1×: full world fit màn hình, 100% mainland countries hiện diện rõ.
 - Zoom 16× tới Italy: Vatican hiển thị ít nhất 1 hex màu riêng.
-- Pan/zoom inertia smooth (60 FPS p95).
+- Pan/zoom inertia smooth (60 FPS p95 trên iPhone 13 Pro Max).
 - Memory peak < 250 MB (JS heap).
+- **All 232 countries** từ Natural Earth admin0 phải có ≥ 1 hex từ tier 25km trở đi.
 
 ---
 
@@ -558,17 +560,25 @@ Trước khi Justin merge:
 
 ---
 
-## 14. Open questions (review trước Phase 0)
+## 14. Confirmed decisions (Justin lock 2026-04-25)
 
-1. Domain deploy: vẫn `modern-wars-2.vercel.app` hay tạo mới `modern-wars-3.vercel.app`?
-2. Repo: tạo mới (recommended) hay overwrite repo cũ?
-3. iPhone test: Justin có iPhone 13 Pro Max thật để test không, hay chỉ Safari iOS Simulator?
-4. Country names tiếng Việt: dùng list 194 nước cũ Justin đã có, hay extract lại từ Natural Earth?
-5. Initial zoom level: 1× (full world fit) hay 1.5× (zoom in slight)?
-6. Bake script timing: chạy 1 lần khi setup repo, hay chạy lại khi update Natural Earth (annual)?
-7. Pre-bake host: bake xong commit luôn vào repo `public/data/`, hay CI bake on deploy?
+| # | Question | Answer |
+|---|---|---|
+| 1 | Deploy domain | `modern-wars-2.vercel.app` (giữ) |
+| 2 | Repo | Overwrite repo cũ |
+| 3 | Test device | **iPhone 16 Pro Max** (real). SPEC dùng iPhone 13 Pro Max làm hard floor để trừ hao |
+| 4 | Country names VN | **Extract 232 nước** như Claude Code làm trước đó (Natural Earth admin0 full list) |
+| 5 | Initial zoom | **1.5×** (slightly zoomed in, không phải 1× full world) |
+| 6 | Bake timing | **Chạy 1 lần khi setup repo**, commit 6 tier files vào git |
+| 7 | Bake host | **Commit vào repo** `public/data/tiles/`, Vercel serve trực tiếp (paid tier, không lo build/storage limit) |
 
-Em recommend default: 2 (new repo), 4 (extract lại), 5 (1×), 6 (chạy 1 lần), 7 (commit vào repo).
+### Implications
+
+- **Hard performance floor**: iPhone 13 Pro Max @ 60fps p95. iPhone 16 Pro Max sẽ thừa headroom (~50% more GPU vs A15) → smooth experience.
+- **Repo size**: ~120 MB sau khi commit tier files. Acceptable với Git LFS hoặc raw commit (Vercel paid không giới hạn).
+- **Build time**: < 1 phút mỗi deploy (không bake lại trong CI).
+- **Initial zoom 1.5×**: viewport bbox tính từ Mercator world × 0.65 (thay vì 1.0). Center tại (0°, 20°N) — nhìn thấy được Châu Á + Châu Âu + Bắc Mỹ cùng lúc, ẩn bớt Antarctica.
+- **232 countries**: bao phủ tất cả entities trong Natural Earth admin0 (sovereign + dependencies + claimed). Force-assignment đảm bảo 100% có ≥ 1 hex.
 
 ---
 
