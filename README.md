@@ -45,9 +45,17 @@ Terminal/sci-fi vibe — dark cyan/magenta accents, JetBrains Mono, scanlines, g
 | 8 | Resilience hardening | 1.5h |
 | 9 | Vercel deployment | 1h |
 
-## Deploy
+## Deploy to Vercel
 
-Vercel (recommended) — see [Section 19](./docs/SPEC.md#19-deployment--cicd).
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fvunh2301%2Fmodern-wars-2)
+
+**1-click setup:**
+1. Click button trên (login Vercel nếu chưa).
+2. Vercel detect framework = **Other** (không có package.json yet).
+3. **Skip Build & Deploy now** — preview hiển thị README + spec link. Production deploy sẽ tự trigger sau Phase 0 (Vite app committed).
+4. Vercel auto-deploy mỗi push `main` (production) + branches/PRs (preview URL).
+
+Alternative: GitHub Pages — see [Section 19.3](./docs/SPEC.md#193-alternative-github-pages).
 
 ## Local dev (after Phase 0)
 
