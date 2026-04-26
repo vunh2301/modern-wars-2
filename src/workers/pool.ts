@@ -36,7 +36,8 @@ export interface QueueAccessor {
 
 export type EnqueueResult =
   | { kind: 'queued' }
-  | { kind: 'dispatched-immediately'; workerIndex: number }
+  /** Idle worker exists; pool calls scheduler.assign() to pick which one. */
+  | { kind: 'dispatched-immediately' }
   | { kind: 'rejected'; reason: 'queue-full' };
 
 /** Scheduling policy owns queue management + worker assignment.
@@ -62,7 +63,27 @@ export interface WorkerPoolOptions {
   lazy?: boolean; // default true (spawn on first dispatch)
   scheduler?: SchedulingStrategy; // default = FifoRoundRobinScheduler
   maxQueueDepth?: number; // default 2 × size
-  workerUrl?: URL; // injectable for tests
+  /**
+   * Factory that constructs a Worker. Default (production) instantiates
+   * decoder.worker.ts via the inline `new Worker(new URL('./decoder.worker.ts',
+   * import.meta.url), { type: 'module' })` pattern Vite needs to bundle the
+   * worker script. Tests inject a stub factory to avoid spawning real workers.
+   *
+   * IMPORTANT: Do NOT replace this with a `workerUrl?: URL` option — Vite only
+   * detects worker bundles when the `new Worker(new URL(...), {...})` call is
+   * literal at the call site. Storing the URL in a variable defeats detection
+   * and ships raw TypeScript instead of a bundled .js file.
+   */
+  workerFactory?: () => Worker;
+}
+
+/** Marker error: worker missing required capability (e.g. DecompressionStream).
+ *  Caller (chunks.ts) catches and falls back to main-thread decode. */
+export class WorkerCapabilityError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'WorkerCapabilityError';
+  }
 }
 
 // ─── Error classes ────────────────────────────────────────────────────────────
@@ -95,10 +116,12 @@ export class FifoRoundRobinScheduler implements SchedulingStrategy {
     workers: ReadonlyArray<WorkerSlot>,
     queue: QueueAccessor,
   ): EnqueueResult {
-    // Try to dispatch immediately to an idle worker.
-    const idleIdx = workers.findIndex((w) => !w.busy);
-    if (idleIdx >= 0) {
-      return { kind: 'dispatched-immediately', workerIndex: idleIdx };
+    // Try to dispatch immediately to an idle worker. Actual worker selection
+    // happens in pool.dispatch() via scheduler.assign() so round-robin state
+    // is honored (H1: previously this branch implicitly picked worker 0).
+    const hasIdle = workers.some((w) => !w.busy);
+    if (hasIdle) {
+      return { kind: 'dispatched-immediately' };
     }
     // All workers busy — try to queue.
     const pushed = queue.push(job);
@@ -116,7 +139,8 @@ export class FifoRoundRobinScheduler implements SchedulingStrategy {
   }
 
   assign(workers: ReadonlyArray<WorkerSlot>, _job: DispatchableJob): number {
-    // Round-robin over idle workers.
+    // Round-robin over idle workers. Bumps rrCounter every call so successive
+    // dispatches spread across the pool instead of always landing on slot 0.
     const idle = workers.filter((w) => !w.busy);
     if (idle.length === 0) return 0; // fallback (shouldn't happen in normal flow)
     const idx = this.rrCounter % idle.length;
@@ -179,7 +203,7 @@ export class WorkerPool {
   private readonly lazy: boolean;
   private readonly scheduler: SchedulingStrategy;
   private readonly queue: BoundedQueue;
-  private readonly workerUrl: URL;
+  private readonly workerFactory: () => Worker;
 
   private workers: Worker[] = [];
   private slots: WorkerSlot[] = [];
@@ -188,9 +212,17 @@ export class WorkerPool {
   private pendingJobs: Map<string, PendingEntry> = new Map();
   private cancelledIds: Set<string> = new Set(); // cancel arrived before result
 
+  // Per-worker DS capability (HIGH H2). If any worker reports
+  // `supportsDecompressionStream === false`, pool enters degraded mode.
+  // While degraded, dispatch() throws WorkerCapabilityError so callers
+  // (chunks.ts) can fall back to main-thread decode.
+  private degraded = false;
+  private degradedReason: string | null = null;
+
   // Stats
   private _queueFullRejects = 0;
   private _totalJobs = 0;
+  private _cancellations = 0;
   private latencies: number[] = []; // rolling window, last 100
 
   constructor(opts: WorkerPoolOptions = {}) {
@@ -204,9 +236,15 @@ export class WorkerPool {
     const maxQueue = opts.maxQueueDepth ?? this.poolSize * 16;
     this.queue = new BoundedQueue(maxQueue);
 
-    // Default worker URL — points to decoder.worker.ts (Vite rewrites at build).
-    this.workerUrl =
-      opts.workerUrl ?? new URL('./decoder.worker.ts', import.meta.url);
+    // Default factory uses the LITERAL `new Worker(new URL(...), {...})` form
+    // Vite needs to detect+bundle decoder.worker.ts. Storing the URL in a
+    // variable would defeat Vite's detection and ship raw .ts at runtime.
+    this.workerFactory =
+      opts.workerFactory ??
+      (() =>
+        new Worker(new URL('./decoder.worker.ts', import.meta.url), {
+          type: 'module',
+        }));
 
     if (!this.lazy) {
       this.spawnAll();
@@ -220,6 +258,14 @@ export class WorkerPool {
   dispatch<TType extends DispatchableJob['type']>(
     job: DispatchableJob & { type: TType },
   ): Promise<ResultFor<TType>> {
+    // H2: any worker missing DecompressionStream → pool degraded; caller
+    // catches WorkerCapabilityError and falls back to main-thread decoder.
+    if (this.degraded) {
+      throw new WorkerCapabilityError(
+        this.degradedReason ?? 'WorkerPool degraded — capability missing',
+      );
+    }
+
     this.ensureWorkers();
 
     const workers = this.slots as ReadonlyArray<WorkerSlot>;
@@ -241,7 +287,9 @@ export class WorkerPool {
       this.pendingJobs.set(job.id, entry);
 
       if (result.kind === 'dispatched-immediately') {
-        this.sendToWorker(result.workerIndex, job, entry);
+        // H1: scheduler picks the actual worker (round-robin across idle slots).
+        const workerIndex = this.scheduler.assign(workers, job);
+        this.sendToWorker(workerIndex, job, entry);
       }
       // else: queued — will be dispatched in drainQueue() when a worker finishes
     });
@@ -249,7 +297,11 @@ export class WorkerPool {
 
   /** Cancel a pending or in-flight job.
    *  Pending: removed from queue, promise rejects with AbortError.
-   *  In-flight: cancel message sent to worker; result discarded on completion. */
+   *  In-flight (B2 fix): reject Promise IMMEDIATELY + dispatch cancel to worker
+   *  in parallel. Worker's eventual result is dropped via cancelledIds set
+   *  (handleWorkerMessage swallows it). Spec §C "fire-and-forget" cancel.
+   *  Previously: pending Promise hung forever because handleWorkerMessage
+   *  discarded the result without calling entry.reject(). */
   cancel(jobId: string): void {
     const entry = this.pendingJobs.get(jobId);
     if (!entry) return; // already resolved or unknown
@@ -258,15 +310,23 @@ export class WorkerPool {
       // Pending in queue — remove + reject immediately.
       this.queue.popById(jobId);
       this.pendingJobs.delete(jobId);
+      this._cancellations++;
       entry.reject(new DOMException('Aborted', 'AbortError'));
     } else {
-      // In-flight — send cancel to assigned worker, mark for discard.
+      // In-flight — fire cancel to worker AND reject the Promise immediately.
+      // Spec §C: don't wait for worker result; main-thread caller is unblocked
+      // and worker's eventual postMessage is silently discarded.
       this.cancelledIds.add(jobId);
       const worker = this.workers[entry.workerIndex];
       if (worker) {
         worker.postMessage({ type: 'cancel', targetId: jobId });
       }
-      // Don't delete from pendingJobs yet — wait for worker result to clean up.
+      // Reject + delete pending entry now. cancelledIds keeps the slot busy
+      // accounting consistent: worker is still working until handleWorkerMessage
+      // sees its result and marks slot idle (then drainQueue picks next job).
+      this.pendingJobs.delete(jobId);
+      this._cancellations++;
+      entry.reject(new DOMException('Aborted', 'AbortError'));
     }
   }
 
@@ -323,8 +383,10 @@ export class WorkerPool {
     queueDepth: number;
     queueFullRejects: number;
     totalJobs: number;
+    cancellations: number;
     p95LatencyMs: number;
     avgLatencyMs: number;
+    degraded: boolean;
   } {
     const sorted = [...this.latencies].sort((a, b) => a - b);
     const p95 =
@@ -340,8 +402,10 @@ export class WorkerPool {
       queueDepth: this.queue.size(),
       queueFullRejects: this._queueFullRejects,
       totalJobs: this._totalJobs,
+      cancellations: this._cancellations,
       p95LatencyMs: Math.round(p95 * 10) / 10,
       avgLatencyMs: Math.round(avg * 10) / 10,
+      degraded: this.degraded,
     };
   }
 
@@ -360,7 +424,7 @@ export class WorkerPool {
   }
 
   private spawnOne(index: number): void {
-    const worker = new Worker(this.workerUrl, { type: 'module' });
+    const worker = this.workerFactory();
     this.workers[index] = worker;
     this.slots[index] = { index, busy: false, inFlightJobId: null };
 
@@ -377,11 +441,26 @@ export class WorkerPool {
     // Handle control messages first.
     if (data.type === 'ready') {
       this.readySlots.add(workerIndex);
+      // H2: respect handshake capability bit. Worker without DecompressionStream
+      // → mark pool degraded so future dispatch() throws WorkerCapabilityError
+      // and chunks.ts falls back to main-thread decode for the rest of session.
+      if (data.supportsDecompressionStream === false && !this.degraded) {
+        this.degraded = true;
+        this.degradedReason = `worker ${workerIndex}: DecompressionStream unavailable`;
+        // Reject every pending+queued job so callers re-route to main thread.
+        const capErr = new WorkerCapabilityError(this.degradedReason);
+        for (const e of this.pendingJobs.values()) {
+          e.reject(capErr);
+        }
+        this.pendingJobs.clear();
+        // Drain queue (jobs already lost their pendingJobs entry).
+        while (this.queue.size() > 0) this.queue.shift();
+      }
       // Resolve one waiting warmup promise.
       const p = this.readyPromises.shift();
       if (p) p.resolve();
-      // Try draining queue now that this worker is ready.
-      this.drainQueue(workerIndex);
+      // Try draining queue now that this worker is ready (only if not degraded).
+      if (!this.degraded) this.drainQueue(workerIndex);
       return;
     }
     if (data.type === 'cancel-ack') {
@@ -402,9 +481,10 @@ export class WorkerPool {
     }
 
     if (this.cancelledIds.has(jobId)) {
-      // Result for a cancelled job — discard.
+      // B2: result arrived after cancel — Promise was already rejected in
+      // cancel(). pendingJobs entry already deleted. Just clear the cancel
+      // marker and free the worker slot for the next job.
       this.cancelledIds.delete(jobId);
-      this.pendingJobs.delete(jobId);
       this.drainQueue(workerIndex);
       return;
     }
