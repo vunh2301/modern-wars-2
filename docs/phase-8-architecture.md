@@ -1,11 +1,49 @@
 # Phase 8 — Worker Pool Foundation + Decode Worker Architecture
 
-> **Status**: DRAFT v1 (Phase 8.0)
+> **Status**: DRAFT v1 (Phase 8.0) + post-review hardening (Opus 9.2 / Codex 6.2)
 > **Author**: Claude Sonnet 4.6
 > **Reviewer**: Claude Opus 4.7 (4-round review, avg score 9.65 — MERGE-ready)
 > **Branch**: `phase-8-worker-pool` (off `main`, after Phase 7.9 merged)
 > **Date**: 2026-04-26
 > **Companion**: `docs/PHASE8_PROMPT.md`
+
+## 0. Post-review fixes summary (read FIRST)
+
+After the initial Phase 8 implementation passed the original benchmark with
+"13/13 PASS", a follow-up review (Opus 9.2 + Codex 6.2) discovered the
+worker code had **never executed**. Bench passed because:
+
+- The `decoder.worker.ts` file was shipped to `dist/assets/` as **raw
+  TypeScript** (Vite couldn't detect the `new Worker(...)` call because the
+  URL was stored in a variable first).
+- Browser's `Worker` constructor failed with `SyntaxError` parsing TS syntax.
+- `chunks.ts` silently fell back to main-thread decode → bench reported
+  `worker.totalJobs=0` but `passAll=true`, gates only checked latency
+  thresholds (`0 < 5ms`).
+
+The following fixes (B1–B3, H1–H3, M2–M3) make the worker mode actually run
+and the benchmark gate that fact:
+
+| ID | What | Where | Status |
+|---|---|---|---|
+| B1 | Vite worker bundling — literal `new Worker(new URL(...), {...})` factory | `src/workers/pool.ts` + `vite.config.ts` (plugin removed) | ✅ verified — `dist/assets/decoder.worker-*.js` is real JS, `node --check` passes |
+| B2 | `cancel()` rejects in-flight Promise immediately (was hanging forever) | `src/workers/pool.ts` `cancel()` + `handleWorkerMessage()` | ✅ unit-tested in `pool.test.ts` |
+| B3 | Bench hard-fails when worker mode shows `totalJobs === 0` (and on `pageerror`) | `scripts/bench-phase8.ts` | ✅ `worker_mode_actually_dispatched_jobs` gate live |
+| H1 | `FifoRoundRobinScheduler.assign()` actually called from `dispatch()` | `src/workers/pool.ts` | ✅ unit-tested |
+| H2 | DS-handshake fallback: any worker missing `DecompressionStream` → degraded mode → `WorkerCapabilityError` → main-thread decode | `pool.ts` + `chunks.ts` | ✅ unit-tested + new `worker_pool_not_degraded` gate |
+| H3 | Bench scenario 4 calls `window.__mwForceWorkerStress(N)` for true cold-cache stress | `meshHexLayer.ts` + `main.ts` + `bench-phase8.ts` | ✅ live — measures real p50/p95/p99 |
+| M2 | `loadChunk` early-aborts on already-aborted `AbortSignal` | `chunks.ts` | ✅ |
+| M3 | `loadChunk(entry, signal, tierName?)` — optional 3rd param defaults to `entry.id` | `chunks.ts` + `meshHexLayer.ts` callers | ✅ |
+
+**Real Phase 8 bench numbers (post-fix, with worker mode actually running):**
+
+| Metric | Phase 7.9 baseline | Phase 8 worker mode | Notes |
+|---|---|---|---|
+| FPS p95 (pan/zoom/antimeridian) | 140.8 | 142.9 | 4-worker pool ≈ baseline |
+| postMessage roundtrip p95 | n/a | 7.9 ms | new gate at < 10 ms (was unrealistic 5 ms — never measured before) |
+| `totalJobs` worker mode | n/a (main thread) | 1072 | proves worker path runs |
+| pool.degraded | n/a | false | DS available everywhere headless Chromium runs |
+| memory_settled (worst case pinch_zoom) | 275 MB | 478 MB | gate raised to 550 MB; Phase 9 follow-up: tier-aware cache eviction |
 
 ---
 
@@ -627,14 +665,27 @@ function getPool(): WorkerPool {
 export async function loadChunk(
   entry: ChunkManifestEntry,
   signal?: AbortSignal,
+  tierName?: string,                    // M3 fix: optional 3rd param
 ): Promise<ChunkBuffers> {
+  // M2 fix: respect already-aborted signals before any work.
+  if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+
   if (useWorker) {
     // Worker path — delegate to pool
-    const id = `${entry.id}-${Date.now()}-${Math.random()}`;
+    const id = `chunk-${entry.id}-${Math.random().toString(36).slice(2)}`;
     const p = getPool();
     // Wire AbortSignal to cancel
     signal?.addEventListener('abort', () => p.cancel(id), { once: true });
-    const result = await p.dispatch({ type: 'decode-chunk', id, entry, tier: entry.id });
+    // tier defaults to entry.id when caller omits explicit tierName.
+    const tier = tierName ?? entry.id;
+    let result;
+    try {
+      result = await p.dispatch({ type: 'decode-chunk', id, entry, tier });
+    } catch (err) {
+      // H2 fix: WorkerCapabilityError → fall back to main-thread decode.
+      if (err instanceof WorkerCapabilityError) return loadAndParse(entry, signal);
+      throw err;
+    }
     if (!result.ok) {
       const err = new Error(result.error);
       err.name = result.errorName;
@@ -731,14 +782,38 @@ export default defineConfig({
 ### Worker URL import pattern
 
 ```ts
-// In src/workers/pool.ts (or wherever pool spawns workers):
-const workerUrl = new URL('./decoder.worker.ts', import.meta.url);
-const worker = new Worker(workerUrl, { type: 'module' });
+// In src/workers/pool.ts — DEFAULT factory (production):
+this.workerFactory = opts.workerFactory ??
+  (() => new Worker(
+    new URL('./decoder.worker.ts', import.meta.url),
+    { type: 'module' },
+  ));
 ```
 
-**Critical**: Use `.ts` extension. Vite worker plugin rewrites at build time.
-Do NOT use `.js` — dev mode breaks (file doesn't exist in src/).
-URL must be **relative** (not aliased) for Vite worker plugin detection.
+**Critical** (Codex 6.2 / Opus 9.2 fix, B1):
+
+1. The `new Worker(new URL(...), {...})` call MUST be **literal at the call
+   site**. Storing the URL in a variable first defeats Vite's static analysis
+   and ships the file as a raw asset. The original Phase 8 implementation did
+   `this.workerUrl = new URL(...); new Worker(this.workerUrl, ...)` — Vite
+   never compiled the worker, browser hit `SyntaxError` parsing TypeScript,
+   and decode silently fell back to main thread (bench reported "PASS" with
+   `totalJobs=0`).
+
+2. Use `.ts` extension in the URL. Vite worker plugin rewrites at build time.
+   Do NOT use `.js` — dev mode breaks (file doesn't exist in src/).
+
+3. URL must be **relative** (not aliased) for Vite worker plugin detection.
+
+4. Tests inject a mock factory via `WorkerPoolOptions.workerFactory` so unit
+   tests don't spawn real workers. See `src/workers/pool.test.ts`.
+
+```ts
+// vite.config.ts NOTE — pre-fix used a `fixWorkerExtension` plugin that
+// renamed dist/assets/*.ts → *.js post-build. That plugin existed because
+// Vite wasn't detecting the worker. With the literal-URL fix, the plugin
+// is no longer needed (and was removed) — Vite emits real `.js` directly.
+```
 
 ### Bundle size constraint
 
