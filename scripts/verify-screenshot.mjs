@@ -88,15 +88,42 @@ await new Promise((r) => setTimeout(r, 4000));
 await page.screenshot({ path: `${OUT}/09-max-zoom.png` });
 console.log('  → 09-max-zoom.png (Paris @ zoom 8× = max)');
 
-// Sanity: pan to Asia interior (lng 100°E lat 50°N) at 50km tier.
-// If lằn appears here too, it's NOT wrap-related (Asia far from antimeridian).
+// Sanity: pan to Asia interior (lng 100°E lat 50°N) at 25km zoom 2.5×.
+// FAR from antimeridian. If lằn appears here too, it's NOT wrap-related.
+await page.evaluate(() => {
+  window.__mwSetZoom?.(2.5);
+  window.__mwCenterOn?.(100, 50);
+});
+await new Promise((r) => setTimeout(r, 3000));
+await page.screenshot({ path: `${OUT}/10-asia-25km.png` });
+console.log('  → 10-asia-25km.png (Russia/Mongolia 100°E/50°N @ 25km zoom 2.5×)');
+
+// Same coords but tier 50km (zoom 1×) for comparison.
 await page.evaluate(() => {
   window.__mwSetZoom?.(1);
   window.__mwCenterOn?.(100, 50);
 });
 await new Promise((r) => setTimeout(r, 3000));
-await page.screenshot({ path: `${OUT}/10-asia-50km.png` });
-console.log('  → 10-asia-50km.png (Asia interior 100°E/50°N @ 50km)');
+await page.screenshot({ path: `${OUT}/11-asia-50km.png` });
+console.log('  → 11-asia-50km.png (Russia interior 100°E/50°N @ 50km)');
+
+// Pan left to lng -180° (test clamp doesn't block left).
+await page.evaluate(() => {
+  window.__mwSetZoom?.(0.5);
+  window.__mwCenterOn?.(-180, 0);
+});
+await new Promise((r) => setTimeout(r, 2000));
+await page.screenshot({ path: `${OUT}/12-pan-left-180.png` });
+console.log('  → 12-pan-left-180.png (lng -180° / clamp test)');
+
+// Zoom 8× pan to right edge (test no empty visible at 10km tier).
+await page.evaluate(() => {
+  window.__mwSetZoom?.(8);
+  window.__mwCenterOn?.(180, 0);
+});
+await new Promise((r) => setTimeout(r, 4000));
+await page.screenshot({ path: `${OUT}/13-zoom8-right-edge.png` });
+console.log('  → 13-zoom8-right-edge.png (lng 180° zoom 8× / 10km tier no-empty test)');
 
 console.log('\n=== LOGS ===');
 for (const l of logs) console.log(l);
