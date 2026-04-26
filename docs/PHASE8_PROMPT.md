@@ -7,7 +7,7 @@
 > Branch: phase-8-worker-pool (off main, AFTER current state merge)
 > Owner: Claude Code Sonnet 4.6 + Claude Opus 4.7 reviewer
 > Estimated effort: 14-18h
-> Spec rev: 3 (post-Opus 9.4 + Codex 9.1 re-review — addresses CancelJob soundness, QueueFullError shape, SchedulingStrategy seam expansion, fallback matrix DS lock, runtime guard, Vite caveat)
+> Spec rev: 4 (post-Opus 9.6 MERGE + Codex 9.3 REVISE — fixes §A stale dispatchStrategy reference, R5 DS contradiction, SchedulingStrategy.enqueue() workers param, static-viewport retry rAF driver, R1 scheduler rename, QueueAccessor positional-insert note)
 
 ---
 
@@ -57,20 +57,22 @@ Rationale (rev 2 corrected facts):
 - Pool size kept independent of "worker types": all workers handle ANY job type. Dispatch
   strategy decides assignment (see below).
 
-**Dispatch strategy = Round-robin in Phase 8 (simplification).**
+**Scheduling = FIFO + round-robin in Phase 8 (default `FifoRoundRobinScheduler`).**
 - Phase 8 only has decode-chunk jobs → no head-of-line blocking risk.
-- Phase 9 MUST revisit: with 400 pathfinds/sec + decode mixing on same workers, round-robin
-  would starve decode behind queued pathfinds.
+- Phase 9 MUST revisit: with 400 pathfinds/sec + decode mixing on same workers,
+  FIFO would starve decode behind queued pathfinds. Phase 9 ships
+  `PriorityAffinityScheduler` (priority queue + worker-affinity assignment).
 - **WorkerPool API does NOT expose round-robin internally.** Constructor accepts
-  `dispatchStrategy` callback (default round-robin). Phase 9 swaps to
-  priority-queue or affinity strategy without changing call sites.
+  `scheduler: SchedulingStrategy` (full interface in §C). Phase 9 swaps the
+  scheduler at construction without changing call sites.
 
-```ts
-type DispatchStrategy = (workers: WorkerSlot[], job: WorkerJob) => number; // returns worker index
-```
+See §C for the canonical `SchedulingStrategy` interface (enqueue + pickNext +
+assign + QueueAccessor). Rev 4 cleanup: removed obsolete narrow
+`(workers, job) => number` example — that signature was rev 2 and is
+SUPERSEDED by §C. Implementer references §C only.
 
-**Acknowledged Phase 9 requirement (in risks table below):** dispatch strategy must support
-priority/affinity. Phase 8 leaves the seam.
+**Acknowledged Phase 9 requirement (in risks table R1):** scheduling must support
+priority/affinity. Phase 8 leaves the seam via `SchedulingStrategy` swap.
 
 ### B. Job types via discriminated union + exhaustive check
 
@@ -84,6 +86,11 @@ two distinct unions — `DispatchableJob` for jobs that flow through `pool.dispa
 src/workers/types.ts:
 
 ```ts
+// `import type` is type-only and elided at compile time, so the chunks→pool→types→chunks
+// dependency cycle does NOT trigger at runtime. Vite handles type-only cycles gracefully.
+// If lint/tooling complains, extract ChunkManifestEntry to src/workers/decoder.ts during
+// Phase 8.0 as part of the parser extraction (decoder.ts is imported by both worker AND
+// chunks.ts main-thread fallback — single source of truth).
 import type { ChunkManifestEntry } from '../data/chunks';
 
 // ─── Dispatchable jobs (each MUST have matching result) ────────────────────
@@ -225,8 +232,13 @@ export interface WorkerSlot {
 /** Scheduling policy owns the queue + assignment. Phase 8 default = FIFO + round-robin.
  *  Phase 9 swaps to priority queue + affinity without changing pool API. */
 export interface SchedulingStrategy {
-  /** Called when a new job arrives. Strategy decides: enqueue, drop, or dispatch now. */
-  enqueue(job: DispatchableJob, queue: QueueAccessor): EnqueueResult;
+  /** Called when a new job arrives. Strategy decides: enqueue, drop, or dispatch now.
+   *  Receives workers so it can return `dispatched-immediately` with a chosen index. */
+  enqueue(
+    job: DispatchableJob,
+    workers: ReadonlyArray<WorkerSlot>,
+    queue: QueueAccessor,
+  ): EnqueueResult;
   /** Called when a worker becomes idle. Strategy picks next job from queue (or null). */
   pickNext(workers: ReadonlyArray<WorkerSlot>, queue: QueueAccessor): DispatchableJob | null;
   /** Worker assignment for the picked job. Default round-robin via internal counter. */
@@ -236,11 +248,17 @@ export interface SchedulingStrategy {
 export interface QueueAccessor {
   size(): number;
   capacity(): number;
-  push(job: DispatchableJob): boolean;   // false if at cap
+  /** Append to tail. Returns false if at cap. */
+  push(job: DispatchableJob): boolean;
   popById(jobId: string): boolean;
   peek(filter?: (j: DispatchableJob) => boolean): DispatchableJob | undefined;
   shift(): DispatchableJob | undefined;
 }
+// Note (Phase 9 readiness): QueueAccessor exposes only push/shift (FIFO ops).
+// Phase 9 PriorityAffinityScheduler MAY maintain its own internal heap and use
+// pool's QueueAccessor only for capacity bookkeeping (push for headroom check,
+// pop drained on demand). Adding insertAt(idx, job) here would also work but is
+// out of scope for Phase 8 since no priority-aware caller exists yet.
 
 export type EnqueueResult =
   | { kind: 'queued' }
@@ -323,10 +341,19 @@ on receipt before resolving the Promise. Mismatch = throw with diagnostic
   AbortError; we extend that catch to include QueueFullError → mark chunk as
   retry-on-next-cull. Add to `meshHexLayer.updateVisibility` (~line 392) a
   retry queue: chunks rejected last frame are re-attempted before fresh visibility
-  query. This guarantees no static-load gap from QueueFullError.
-- Codex finding addressed: meshHexLayer didn't auto-retry; rev 3 adds
-  `retryNextCull: Set<string>` populated by catch path, drained at start of
-  next `updateVisibility`.
+  query.
+- **Static-viewport retry driver (rev 4 — Codex HIGH):** updateVisibility runs only
+  on `viewport.on('zoomed' | 'moved')` events (main.ts:241,246). On a static viewport,
+  no event fires → retryNextCull Set fills but never drains. Required behavior:
+  when meshHexLayer.fetchAndMount catches QueueFullError AND `retryNextCull.size`
+  was 0 (i.e. this is the FIRST retry key added since last cull), schedule a
+  one-shot `requestAnimationFrame(() => cullNow())` to drive the drain. Use a
+  single rAF guard flag (`retryRafScheduled: boolean`) to ensure at most one rAF
+  in-flight regardless of how many chunks fail. The next cullNow drains the Set
+  (clears flag); if QueueFull recurs, next failure schedules the next rAF. Bounded:
+  retry queue ≤ visible chunk count (capped ≤20 per Phase 7.9 baseline).
+- Codex finding addressed: rev 3 added `retryNextCull` Set; rev 4 adds the
+  rAF driver to handle static viewport.
 
 ### D. Transferable buffer ownership (precise shape)
 
@@ -697,8 +724,10 @@ Stop after iter 2.
 4. TypeScript strict mode. Discriminated union exhaustiveness MUST be compile-enforced via
    `assertNever` in default branch (no plain `default:` allowed in worker job/result switches).
 5. A/B switch required: `?worker=on` (default) | `?worker=off` (Phase 7.9 fallback).
-6. Phase 7.9 main-thread decode path stays fully functional (used by `?worker=off` AND
-   environments without DecompressionStream).
+6. Phase 7.9 main-thread decode path stays fully functional (used by `?worker=off`).
+   Note: main-thread also requires DecompressionStream — see §E DS hard baseline lock.
+   "Environments without DecompressionStream" boot-fail via existing main.ts catch
+   (line 256), NOT main-thread fallback.
 7. Worker bundle < 50KB gzipped. Build-time assertion.
 8. Cleanup task: stale "zero-copy" comments in chunks.ts (e.g. line 18-25 docstring) →
    update to reflect Phase 7.9 `.slice()` reality during decoder extraction.
@@ -783,11 +812,11 @@ Stop after iter 2 — don't push iter 3.
 
 | ID | Risk | Mitigation |
 |---|---|---|
-| R1 | Phase 9 round-robin starvation (decode behind 100 queued pathfinds) | Pool dispatchStrategy pluggable via constructor; Phase 9 swaps to priority queue |
+| R1 | Phase 9 round-robin starvation (decode behind 100 queued pathfinds) | Pool `scheduler: SchedulingStrategy` pluggable via constructor (see §C); Phase 9 swaps to PriorityAffinityScheduler |
 | R2 | A18 Pro 2P+4E only — 4 workers may oversubscribe E-cores | Phase 8.7 iter 1 candidate: tune pool size to 3; bench iPhone for confirmation |
 | R3 | Worker memory invisible to performance.memory | Document in HUD + phase-8-architecture.md; cross-check via DevTools Performance > Memory |
 | R4 | Worker bundle bloat (accidental pixi.js import) | Build-time assertion in bench-phase8.ts (gzip < 50KB) |
-| R5 | iOS Safari < 16.4 missing DecompressionStream | Worker handshake reports support → fall back to main-thread for that session |
+| R5 | iOS Safari < 16.4 missing DecompressionStream (project-wide hard baseline) | Boot fails via existing main.ts catch (line 256). Phase 8 does NOT add a non-DS path; users on Safari < 16.4 see error UI. Document in release notes. |
 | R6 | postMessage overhead eats FPS headroom | Phase 8.7 iter 1: profile clone vs transfer, audit transferList completeness |
 | R7 | Cancellation race (cancel arrives after worker posted result) | Main ignores cancel-acks for already-resolved jobIds (Map cleanup on result delivery) |
 | R8 | Pathfind result allocation churn at 400/sec | Locked: packed Int16Array buffer payload (not Array<[n,n]>) |
