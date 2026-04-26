@@ -1,22 +1,25 @@
 /**
- * Phase 7.2 chunk loader. Reads MWCK binary (gzipped) from
- * /public/data/chunks/{tier}/c-{col}-{row}.{hash}.bin and exposes
- * zero-copy views suitable for Pixi v8 Geometry attribute buffers.
+ * Phase 7.2 chunk loader. Reads MWCK v2 (instanced) binary (gzipped) from
+ * /public/data/chunks/{tier}/c-{col}-{row}.{hash}.bin and exposes zero-copy
+ * views suitable for Pixi v8 Geometry attribute buffers (instanced mode).
  *
- * See docs/phase-7-architecture.md § 5 for binary format.
+ * Phase 7 Iter 2: Format v2 = template + instances + shared index, ~10×
+ * smaller than v1 (per-vertex packed).
  *
- * AbortController per fetch — see § 8.5. Two-level cache:
- *   - Per-tier manifest fetched once.
- *   - ChunkCache (LRU 24) keeps decoded ChunkBuffers warm.
+ * AbortController per fetch — see arch § 8.5.
  */
 
 const HEADER_SIZE = 16;
+const TEMPLATE_BYTES = 48;
+const INDEX_BYTES = 48;
 const FOOTER_SIZE = 32;
 
 export interface ChunkBuffers {
-  /** Raw interleaved vertex bytes (hex_count × 6 × 12). */
-  vertexBuffer: ArrayBuffer;
-  /** Index buffer (hex_count × 12 uint32). */
+  /** 6 hex template vertices × (x:f32, y:f32) pre-scaled to hexSizeWorldPx. */
+  templateBuffer: ArrayBuffer;
+  /** Per-hex instance attrs: (cx:f32, cy:f32, RGBA:u8×4) interleaved. */
+  instanceBuffer: ArrayBuffer;
+  /** Static index buffer (12 uint32 fan triangulation, shared across instances). */
   indexBuffer: Uint32Array;
   /** Edge segments [x1, y1, x2, y2, …] (edge_count × 4 floats). */
   edgeBuffer: Float32Array;
@@ -91,7 +94,7 @@ export async function loadChunk(
   return parseChunkBinary(arrayBuffer, entry);
 }
 
-/** Parse MWCK binary buffer → typed views. Throws on format error. */
+/** Parse MWCK v2 binary buffer → typed views. Throws on format error. */
 export function parseChunkBinary(buf: ArrayBuffer, entry: ChunkManifestEntry): ChunkBuffers {
   const view = new DataView(buf);
 
@@ -103,7 +106,7 @@ export function parseChunkBinary(buf: ArrayBuffer, entry: ChunkManifestEntry): C
     String.fromCharCode(view.getUint8(3));
   if (magic !== 'MWCK') throw new Error(`${entry.file}: bad magic ${magic}`);
   const version = view.getUint32(4, true);
-  if (version !== 1) throw new Error(`${entry.file}: unsupported version ${version}`);
+  if (version !== 2) throw new Error(`${entry.file}: unsupported version ${version} (expected 2)`);
   const tierSizeKm = view.getUint16(8, true);
   const col = view.getUint8(10);
   const row = view.getUint8(11);
@@ -112,19 +115,21 @@ export function parseChunkBinary(buf: ArrayBuffer, entry: ChunkManifestEntry): C
     throw new Error(`${entry.file}: hexCount ${hexCount} ≠ manifest ${entry.hexCount}`);
   }
 
-  // Vertex buffer (interleaved x:f32, y:f32, RGBA:u8×4 = 12B / vertex × 6 verts / hex)
-  const vertexBytes = hexCount * 6 * 12;
-  const vertexOffset = HEADER_SIZE;
-  // ArrayBuffer slice keeps zero-copy if buf is the source.
-  const vertexBuffer = buf.slice(vertexOffset, vertexOffset + vertexBytes);
+  // Template (48 B): 6 verts × (x:f32, y:f32) pre-scaled
+  const templateOffset = HEADER_SIZE;
+  const templateBuffer = buf.slice(templateOffset, templateOffset + TEMPLATE_BYTES);
 
-  // Index buffer (12 indices/hex × 4B)
-  const indexOffset = vertexOffset + vertexBytes;
-  const indexBytes = hexCount * 12 * 4;
-  const indexBuffer = new Uint32Array(buf.slice(indexOffset, indexOffset + indexBytes));
+  // Instance buffer (hex_count × 12 B)
+  const instanceOffset = templateOffset + TEMPLATE_BYTES;
+  const instanceBytes = hexCount * 12;
+  const instanceBuffer = buf.slice(instanceOffset, instanceOffset + instanceBytes);
+
+  // Static index (48 B = 12 uint32, shared fan triangulation)
+  const indexOffset = instanceOffset + instanceBytes;
+  const indexBuffer = new Uint32Array(buf.slice(indexOffset, indexOffset + INDEX_BYTES));
 
   // Edge prefix + edges
-  const edgePrefixOffset = indexOffset + indexBytes;
+  const edgePrefixOffset = indexOffset + INDEX_BYTES;
   const edgeCount = view.getUint32(edgePrefixOffset, true);
   const edgeOffset = edgePrefixOffset + 4;
   const edgeBytes = edgeCount * 16;
@@ -147,7 +152,8 @@ export function parseChunkBinary(buf: ArrayBuffer, entry: ChunkManifestEntry): C
   }
 
   return {
-    vertexBuffer,
+    templateBuffer,
+    instanceBuffer,
     indexBuffer,
     edgeBuffer,
     hexCount,

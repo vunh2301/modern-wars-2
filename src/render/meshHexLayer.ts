@@ -144,9 +144,15 @@ export function createMeshHexLayer(app: Application): MeshHexLayer {
     performance.mark('chunk-build-start');
     const t0 = performance.now();
 
-    // Vertex buffer (interleaved x:f32 y:f32 RGBA:u8×4 = 12B/vertex × 6 verts/hex)
-    const vertBuf = new PixiBuffer({
-      data: new Uint8Array(buffers.vertexBuffer),
+    // Phase 7 Iter 2: instanced rendering (MWCK v2). 10× smaller GPU footprint
+    // than v1 (per-vertex packed). Template (48 B) + instance attrs (12 B/hex)
+    // + shared static index (48 B for fan triangulation).
+    const templateBuf = new PixiBuffer({
+      data: new Uint8Array(buffers.templateBuffer),
+      usage: BufferUsage.VERTEX | BufferUsage.COPY_DST,
+    });
+    const instanceBuf = new PixiBuffer({
+      data: new Uint8Array(buffers.instanceBuffer),
       usage: BufferUsage.VERTEX | BufferUsage.COPY_DST,
     });
     const idxBuf = new PixiBuffer({
@@ -156,11 +162,13 @@ export function createMeshHexLayer(app: Application): MeshHexLayer {
 
     const geom = new Geometry({
       attributes: {
-        aPosition: { buffer: vertBuf, format: 'float32x2', offset: 0, stride: 12 },
-        aColor: { buffer: vertBuf, format: 'unorm8x4', offset: 8, stride: 12 },
+        aTemplate: { buffer: templateBuf, format: 'float32x2' },
+        aInstancePos: { buffer: instanceBuf, format: 'float32x2', offset: 0, stride: 12, instance: true },
+        aInstanceColor: { buffer: instanceBuf, format: 'unorm8x4', offset: 8, stride: 12, instance: true },
       },
       indexBuffer: idxBuf,
       topology: 'triangle-list',
+      instanceCount: buffers.hexCount,
     });
 
     const mesh = new Mesh<Geometry, Shader>({ geometry: geom, shader });

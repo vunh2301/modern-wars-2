@@ -228,7 +228,10 @@ function partitionTier(
   return chunks;
 }
 
-// ─── Encode per-chunk binary (MWCK format, see arch § 5) ───────────────────
+// ─── Encode per-chunk binary (MWCK v2 format — instanced) ─────────────────
+// Phase 7 Iter 2: switch C1 (per-vertex packed) → C2 (instanced).
+// Layout:
+//   Header(16) + Template(48) + Instances(N×12) + Index(48) + EdgePrefix(4) + Edges(E×16) + Footer(32)
 function encodeChunkBinary(
   chunk: ChunkData,
   sizeKm: number,
@@ -239,56 +242,54 @@ function encodeChunkBinary(
   const E = chunk.edges.length / 4;
 
   const HEADER_SIZE = 16;
-  const VERTEX_BYTES = N * 6 * 12;        // 6 verts × (f32+f32+u8×4)
-  const INDEX_BYTES = N * 12 * 4;         // 12 indices × u32
-  const EDGE_PREFIX = 4;                  // u32 edge_count
-  const EDGE_BYTES = E * 16;              // 4 floats
+  const TEMPLATE_BYTES = 48;              // 6 verts × (f32, f32) pre-scaled
+  const INSTANCE_BYTES = N * 12;          // per hex: cx:f32, cy:f32, RGBA:u8×4
+  const INDEX_BYTES = 48;                 // 12 uint32 fan triangulation (shared)
+  const EDGE_PREFIX = 4;
+  const EDGE_BYTES = E * 16;
   const FOOTER_SIZE = 32;
 
-  const totalSize = HEADER_SIZE + VERTEX_BYTES + INDEX_BYTES + EDGE_PREFIX + EDGE_BYTES + FOOTER_SIZE;
+  const totalSize = HEADER_SIZE + TEMPLATE_BYTES + INSTANCE_BYTES + INDEX_BYTES + EDGE_PREFIX + EDGE_BYTES + FOOTER_SIZE;
   const buf = Buffer.alloc(totalSize);
   const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
 
-  // Header
+  // Header (version = 2)
   buf.write('MWCK', 0, 'ascii');
-  view.setUint32(4, 1, true);
+  view.setUint32(4, 2, true);
   view.setUint16(8, sizeKm, true);
   view.setUint8(10, chunk.bbox.col);
   view.setUint8(11, chunk.bbox.row);
   view.setUint32(12, N, true);
 
-  // Vertex buffer (interleaved x:f32, y:f32, r:u8, g:u8, b:u8, a:u8)
+  // Template: 6 hex vertices pre-scaled by hexSizeWorldPx (relative to instance center).
   let off = HEADER_SIZE;
+  for (let v = 0; v < 6; v++) {
+    const angle = (Math.PI / 3) * v;
+    view.setFloat32(off, hexSizeWorldPx * Math.cos(angle), true);
+    view.setFloat32(off + 4, hexSizeWorldPx * Math.sin(angle), true);
+    off += 8;
+  }
+
+  // Instance buffer: per hex (cx, cy, RGBA)
   for (let i = 0; i < N; i++) {
     const h = chunk.hexes[i]!;
     const [cx, cy] = axialToPx(h.q, h.r, hexSizeWorldPx);
     const tint = lut[h.countryId] ?? 0x666688;
-    const r = (tint >> 16) & 0xff;
-    const g = (tint >> 8) & 0xff;
-    const b = tint & 0xff;
-    for (let v = 0; v < 6; v++) {
-      const angle = (Math.PI / 3) * v;
-      const vx = cx + hexSizeWorldPx * Math.cos(angle);
-      const vy = cy + hexSizeWorldPx * Math.sin(angle);
-      view.setFloat32(off, vx, true);
-      view.setFloat32(off + 4, vy, true);
-      view.setUint8(off + 8, r);
-      view.setUint8(off + 9, g);
-      view.setUint8(off + 10, b);
-      view.setUint8(off + 11, 0xff); // alpha
-      off += 12;
-    }
+    view.setFloat32(off, cx, true);
+    view.setFloat32(off + 4, cy, true);
+    view.setUint8(off + 8, (tint >> 16) & 0xff);
+    view.setUint8(off + 9, (tint >> 8) & 0xff);
+    view.setUint8(off + 10, tint & 0xff);
+    view.setUint8(off + 11, 0xff);
+    off += 12;
   }
 
-  // Index buffer (fan triangulation: vertex 0 → (1,2), (2,3), (3,4), (4,5))
-  for (let i = 0; i < N; i++) {
-    const base = i * 6;
-    for (let t = 0; t < 4; t++) {
-      view.setUint32(off, base, true);
-      view.setUint32(off + 4, base + t + 1, true);
-      view.setUint32(off + 8, base + t + 2, true);
-      off += 12;
-    }
+  // Index buffer: fan triangulation 0→(1,2), 0→(2,3), 0→(3,4), 0→(4,5) — shared across all instances
+  for (let t = 0; t < 4; t++) {
+    view.setUint32(off, 0, true);
+    view.setUint32(off + 4, t + 1, true);
+    view.setUint32(off + 8, t + 2, true);
+    off += 12;
   }
 
   // Edge prefix
@@ -301,7 +302,7 @@ function encodeChunkBinary(
     off += 4;
   }
 
-  // Footer (bbox + centroid; 8 bytes reserved zero already)
+  // Footer
   view.setFloat32(off, chunk.bbox.minX, true);
   view.setFloat32(off + 4, chunk.bbox.minY, true);
   view.setFloat32(off + 8, chunk.bbox.maxX, true);
@@ -332,7 +333,7 @@ function verifyChunk(filepath: string, expected: ChunkManifestEntry, sizeKm: num
     String.fromCharCode(view.getUint8(3));
   if (magic !== 'MWCK') throw new Error(`${filepath}: bad magic ${magic}`);
   const ver = view.getUint32(4, true);
-  if (ver !== 1) throw new Error(`${filepath}: bad version ${ver}`);
+  if (ver !== 2) throw new Error(`${filepath}: bad version ${ver} (expected 2)`);
   const tierKmOnDisk = view.getUint16(8, true);
   if (tierKmOnDisk !== sizeKm) throw new Error(`${filepath}: tier mismatch ${tierKmOnDisk} vs ${sizeKm}`);
   const colOnDisk = view.getUint8(10);

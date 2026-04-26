@@ -1,34 +1,34 @@
 /**
- * Phase 7.4 hex shader. Minimal WebGL shader for Mesh-based hex rendering.
+ * Phase 7.4 hex shader (MWCK v2 instanced).
  *
- * Vertex inputs:
- *   aPosition (vec2)  — world px coords (interleaved at offset 0, stride 12)
- *   aColor    (vec4)  — RGBA from 4×u8 unorm (interleaved at offset 8, stride 12)
+ * Per-vertex (template, 6 verts):
+ *   aTemplate (vec2) — pre-scaled hex vertex offset from instance center
  *
- * Pixi v8 Mesh auto-binds:
- *   uProjectionMatrix    — camera projection (mat3)
- *   uWorldTransformMatrix — world-space transform of the parent Container (mat3)
- *   uTransformMatrix     — local mesh transform (mat3, includes mesh.x for wrap offset)
+ * Per-instance (one per hex):
+ *   aInstancePos   (vec2) — chunk-local hex center in world px
+ *   aInstanceColor (vec4) — RGBA from u8×4 unorm
  *
- * Fragment: passthrough vColor. No textures.
+ * Pixi v8 Mesh auto-binds: uProjectionMatrix * uWorldTransformMatrix * uTransformMatrix.
  *
- * GLSL ES 1.0 (attribute / varying / gl_FragColor) for max iOS Safari compat.
+ * Fragment: passthrough. GLSL ES 1.0 (max iOS Safari compat).
  */
 import { Shader } from 'pixi.js';
 
 const VERTEX_SRC = /* glsl */ `
   precision highp float;
-  attribute vec2 aPosition;
-  attribute vec4 aColor;
+  attribute vec2 aTemplate;
+  attribute vec2 aInstancePos;
+  attribute vec4 aInstanceColor;
   varying vec4 vColor;
   uniform mat3 uProjectionMatrix;
   uniform mat3 uWorldTransformMatrix;
   uniform mat3 uTransformMatrix;
   void main() {
+    vec2 worldPos = aInstancePos + aTemplate;
     mat3 mvp = uProjectionMatrix * uWorldTransformMatrix * uTransformMatrix;
-    vec3 pos = mvp * vec3(aPosition, 1.0);
+    vec3 pos = mvp * vec3(worldPos, 1.0);
     gl_Position = vec4(pos.xy, 0.0, 1.0);
-    vColor = aColor;
+    vColor = aInstanceColor;
   }
 `;
 

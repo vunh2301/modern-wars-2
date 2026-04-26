@@ -1,0 +1,477 @@
+{
+  "version": "1.0.0",
+  "lastScanned": 1777146312244,
+  "projectRoot": "C:\\Users\\Codex\\repo\\modern-war",
+  "techStack": {
+    "languages": [
+      {
+        "name": "JavaScript/TypeScript",
+        "version": ">=20",
+        "confidence": "high",
+        "markers": [
+          "package.json"
+        ]
+      },
+      {
+        "name": "TypeScript",
+        "version": null,
+        "confidence": "high",
+        "markers": [
+          "tsconfig.json"
+        ]
+      }
+    ],
+    "frameworks": [
+      {
+        "name": "vite",
+        "version": "7.0.0",
+        "category": "build"
+      },
+      {
+        "name": "vitest",
+        "version": "2.1.2",
+        "category": "testing"
+      }
+    ],
+    "packageManager": "npm",
+    "runtime": "Node.js 20"
+  },
+  "build": {
+    "buildCommand": "npm run build",
+    "testCommand": "npm test",
+    "lintCommand": "npm run lint",
+    "devCommand": "npm run dev",
+    "scripts": {
+      "dev": "vite",
+      "build": "tsc -b && vite build",
+      "preview": "vite preview --port 4173",
+      "lint": "eslint . --ext .ts,.tsx --max-warnings=0",
+      "typecheck": "tsc --noEmit",
+      "bake": "tsx scripts/bake-hex-tiers.ts",
+      "test": "vitest run"
+    }
+  },
+  "conventions": {
+    "namingStyle": "camelCase",
+    "importStyle": null,
+    "testPattern": null,
+    "fileOrganization": null
+  },
+  "structure": {
+    "isMonorepo": false,
+    "workspaces": [],
+    "mainDirectories": [
+      "docs",
+      "public",
+      "scripts",
+      "src"
+    ],
+    "gitBranches": null
+  },
+  "customNotes": [],
+  "directoryMap": {
+    "dist": {
+      "path": "dist",
+      "purpose": "Distribution/build output",
+      "fileCount": 1,
+      "lastAccessed": 1777146312227,
+      "keyFiles": [
+        "index.html"
+      ]
+    },
+    "docs": {
+      "path": "docs",
+      "purpose": "Documentation",
+      "fileCount": 1,
+      "lastAccessed": 1777146312228,
+      "keyFiles": [
+        "SPEC.md"
+      ]
+    },
+    "public": {
+      "path": "public",
+      "purpose": "Public files",
+      "fileCount": 0,
+      "lastAccessed": 1777146312232,
+      "keyFiles": []
+    },
+    "scripts": {
+      "path": "scripts",
+      "purpose": "Build/utility scripts",
+      "fileCount": 4,
+      "lastAccessed": 1777146312232,
+      "keyFiles": [
+        "bake-hex-tiers.ts",
+        "extract-ne-10m.mjs",
+        "screenshot.mjs",
+        "verify-screenshot.mjs"
+      ]
+    },
+    "src": {
+      "path": "src",
+      "purpose": "Source code",
+      "fileCount": 1,
+      "lastAccessed": 1777146312232,
+      "keyFiles": [
+        "main.ts"
+      ]
+    },
+    "vendor": {
+      "path": "vendor",
+      "purpose": "Third-party code",
+      "fileCount": 5,
+      "lastAccessed": 1777146312232,
+      "keyFiles": [
+        "CHECKSUMS.txt",
+        "ne_10m_admin_0_countries.geojson",
+        "ne_10m_admin_0_countries.zip",
+        "ne_50m_admin_0_countries.geojson"
+      ]
+    },
+    "dist\\assets": {
+      "path": "dist\\assets",
+      "purpose": "Static assets",
+      "fileCount": 4,
+      "lastAccessed": 1777146312233,
+      "keyFiles": [
+        "browserAll-CF9uJzp5.js",
+        "index-BCenm234.js",
+        "pixi-C7c_7qeM.js"
+      ]
+    },
+    "dist\\data": {
+      "path": "dist\\data",
+      "purpose": "Data files",
+      "fileCount": 2,
+      "lastAccessed": 1777146312233,
+      "keyFiles": [
+        "countries.json",
+        "manifest.json"
+      ]
+    },
+    "public\\data": {
+      "path": "public\\data",
+      "purpose": "Data files",
+      "fileCount": 2,
+      "lastAccessed": 1777146312233,
+      "keyFiles": [
+        "countries.json",
+        "manifest.json"
+      ]
+    },
+    "src\\data": {
+      "path": "src\\data",
+      "purpose": "Data files",
+      "fileCount": 3,
+      "lastAccessed": 1777146312234,
+      "keyFiles": [
+        "countries.ts",
+        "manifest.ts",
+        "tiers.ts"
+      ]
+    }
+  },
+  "hotPaths": [
+    {
+      "path": "src\\main.ts",
+      "accessCount": 41,
+      "lastAccessed": 1777188852057,
+      "type": "file"
+    },
+    {
+      "path": "src\\render\\hexLayer.ts",
+      "accessCount": 40,
+      "lastAccessed": 1777184897087,
+      "type": "file"
+    },
+    {
+      "path": "src\\render\\viewport.ts",
+      "accessCount": 19,
+      "lastAccessed": 1777185235979,
+      "type": "file"
+    },
+    {
+      "path": "scripts\\verify-screenshot.mjs",
+      "accessCount": 15,
+      "lastAccessed": 1777182916225,
+      "type": "file"
+    },
+    {
+      "path": "src",
+      "accessCount": 12,
+      "lastAccessed": 1777180877204,
+      "type": "directory"
+    },
+    {
+      "path": "scripts\\bench-phase6.ts",
+      "accessCount": 12,
+      "lastAccessed": 1777183755875,
+      "type": "file"
+    },
+    {
+      "path": ".screenshots\\06-bering.png",
+      "accessCount": 8,
+      "lastAccessed": 1777174794782,
+      "type": "file"
+    },
+    {
+      "path": "src\\geo\\projection.ts",
+      "accessCount": 8,
+      "lastAccessed": 1777182022550,
+      "type": "file"
+    },
+    {
+      "path": "scripts\\bake-hex-tiers.ts",
+      "accessCount": 8,
+      "lastAccessed": 1777186367385,
+      "type": "file"
+    },
+    {
+      "path": "src\\render\\chunkGrid.ts",
+      "accessCount": 7,
+      "lastAccessed": 1777185050983,
+      "type": "file"
+    },
+    {
+      "path": ".screenshots\\01-fit.png",
+      "accessCount": 6,
+      "lastAccessed": 1777174795345,
+      "type": "file"
+    },
+    {
+      "path": "docs\\phase-6-architecture.md",
+      "accessCount": 6,
+      "lastAccessed": 1777183172969,
+      "type": "file"
+    },
+    {
+      "path": "src\\render\\benchmark.ts",
+      "accessCount": 6,
+      "lastAccessed": 1777188767983,
+      "type": "file"
+    },
+    {
+      "path": "",
+      "accessCount": 5,
+      "lastAccessed": 1777180860023,
+      "type": "directory"
+    },
+    {
+      "path": "src\\data\\tiers.ts",
+      "accessCount": 4,
+      "lastAccessed": 1777188212035,
+      "type": "file"
+    },
+    {
+      "path": "src\\geo\\hex.ts",
+      "accessCount": 3,
+      "lastAccessed": 1777182047430,
+      "type": "file"
+    },
+    {
+      "path": "docs\\SPEC.md",
+      "accessCount": 3,
+      "lastAccessed": 1777182608900,
+      "type": "file"
+    },
+    {
+      "path": "package.json",
+      "accessCount": 3,
+      "lastAccessed": 1777188363602,
+      "type": "file"
+    },
+    {
+      "path": ".screenshots\\02-zoom-0.5.png",
+      "accessCount": 2,
+      "lastAccessed": 1777169398421,
+      "type": "file"
+    },
+    {
+      "path": ".screenshots\\12-pan-left-180.png",
+      "accessCount": 2,
+      "lastAccessed": 1777176835408,
+      "type": "file"
+    },
+    {
+      "path": ".screenshots\\13-zoom8-right-edge.png",
+      "accessCount": 2,
+      "lastAccessed": 1777176835765,
+      "type": "file"
+    },
+    {
+      "path": ".screenshots\\15-lan-178-65.png",
+      "accessCount": 2,
+      "lastAccessed": 1777179506031,
+      "type": "file"
+    },
+    {
+      "path": ".screenshots\\13-zoom8-right-clamp.png",
+      "accessCount": 2,
+      "lastAccessed": 1777179506086,
+      "type": "file"
+    },
+    {
+      "path": "src\\render\\lod.ts",
+      "accessCount": 2,
+      "lastAccessed": 1777182020514,
+      "type": "file"
+    },
+    {
+      "path": "src\\render\\stage.ts",
+      "accessCount": 2,
+      "lastAccessed": 1777182047081,
+      "type": "file"
+    },
+    {
+      "path": "tsconfig.json",
+      "accessCount": 2,
+      "lastAccessed": 1777182048653,
+      "type": "file"
+    },
+    {
+      "path": ".screenshots\\03-zoom-1.5.png",
+      "accessCount": 1,
+      "lastAccessed": 1777146756174,
+      "type": "file"
+    },
+    {
+      "path": ".screenshots\\04-zoom-5.png",
+      "accessCount": 1,
+      "lastAccessed": 1777146797299,
+      "type": "file"
+    },
+    {
+      "path": ".screenshots\\05-europe-zoom-4.png",
+      "accessCount": 1,
+      "lastAccessed": 1777169768399,
+      "type": "file"
+    },
+    {
+      "path": ".screenshots\\06-antimeridian.png",
+      "accessCount": 1,
+      "lastAccessed": 1777170584361,
+      "type": "file"
+    },
+    {
+      "path": ".screenshots\\07-wrapped-360.png",
+      "accessCount": 1,
+      "lastAccessed": 1777170584834,
+      "type": "file"
+    },
+    {
+      "path": ".screenshots\\07-wrapped-270.png",
+      "accessCount": 1,
+      "lastAccessed": 1777170689823,
+      "type": "file"
+    },
+    {
+      "path": ".screenshots\\08-somaliland.png",
+      "accessCount": 1,
+      "lastAccessed": 1777171760453,
+      "type": "file"
+    },
+    {
+      "path": ".screenshots\\09-max-zoom.png",
+      "accessCount": 1,
+      "lastAccessed": 1777171760671,
+      "type": "file"
+    },
+    {
+      "path": ".screenshots\\10-asia-50km.png",
+      "accessCount": 1,
+      "lastAccessed": 1777173212203,
+      "type": "file"
+    },
+    {
+      "path": ".screenshots\\11-asia-50km.png",
+      "accessCount": 1,
+      "lastAccessed": 1777175429863,
+      "type": "file"
+    },
+    {
+      "path": ".screenshots\\10-asia-25km.png",
+      "accessCount": 1,
+      "lastAccessed": 1777175429885,
+      "type": "file"
+    },
+    {
+      "path": ".screenshots\\13-zoom8-far-east.png",
+      "accessCount": 1,
+      "lastAccessed": 1777176965414,
+      "type": "file"
+    },
+    {
+      "path": ".screenshots\\14-y-pan-greenland.png",
+      "accessCount": 1,
+      "lastAccessed": 1777176965658,
+      "type": "file"
+    },
+    {
+      "path": "src\\geo",
+      "accessCount": 1,
+      "lastAccessed": 1777177199660,
+      "type": "directory"
+    },
+    {
+      "path": ".screenshots\\13b-zoom8-left-clamp.png",
+      "accessCount": 1,
+      "lastAccessed": 1777178865230,
+      "type": "file"
+    },
+    {
+      "path": ".screenshots\\15-25km-bering-seam.png",
+      "accessCount": 1,
+      "lastAccessed": 1777179010627,
+      "type": "file"
+    },
+    {
+      "path": ".screenshots\\15-lan--178-65.png",
+      "accessCount": 1,
+      "lastAccessed": 1777179169945,
+      "type": "file"
+    },
+    {
+      "path": "src\\data\\manifest.ts",
+      "accessCount": 1,
+      "lastAccessed": 1777182047930,
+      "type": "file"
+    },
+    {
+      "path": "src\\render\\colors.ts",
+      "accessCount": 1,
+      "lastAccessed": 1777182048309,
+      "type": "file"
+    },
+    {
+      "path": "src\\data\\countries.ts",
+      "accessCount": 1,
+      "lastAccessed": 1777182059621,
+      "type": "file"
+    },
+    {
+      "path": "scripts\\screenshot.mjs",
+      "accessCount": 1,
+      "lastAccessed": 1777182915951,
+      "type": "file"
+    },
+    {
+      "path": "docs\\phase-6-iter-1.md",
+      "accessCount": 1,
+      "lastAccessed": 1777183656432,
+      "type": "file"
+    },
+    {
+      "path": "docs\\phase-6-iter-2.md",
+      "accessCount": 1,
+      "lastAccessed": 1777184193367,
+      "type": "file"
+    },
+    {
+      "path": "docs\\phase-6-iter-3.md",
+      "accessCount": 1,
+      "lastAccessed": 1777184846209,
+      "type": "file"
+    }
+  ],
+  "userDirectives": []
+}
