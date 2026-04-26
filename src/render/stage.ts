@@ -15,7 +15,12 @@ const OCEAN_BG = 0x040d18;
 
 export async function createStage(): Promise<Application> {
   const app = new Application();
+  // Phase 7.8 (2026-04-26): default ?renderer=webgpu (iOS Safari 18.4+
+  // enables WebGPU on iPhone). Pixi v8 auto-fallback to WebGL2 if not
+  // supported. URL override ?renderer=webgl forces fallback.
+  const rendererPref = (new URLSearchParams(location.search).get('renderer') ?? 'webgpu') as 'webgl' | 'webgpu';
   await app.init({
+    preference: rendererPref,
     background: new Color(OCEAN_BG),
     resizeTo: window,
     resolution: Math.min(window.devicePixelRatio ?? 1, 2),
@@ -23,6 +28,11 @@ export async function createStage(): Promise<Application> {
     autoDensity: true,
     powerPreference: 'high-performance',
   });
+  // app.renderer.type: 1=WEBGL, 2=WEBGPU enum.
+  const typeStr = app.renderer.type === 2 ? 'webgpu' : 'webgl';
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (window as any).__mwRenderer = typeStr;
+  console.info(`[stage] renderer=${typeStr} (preference=${rendererPref})`);
   return app;
 }
 

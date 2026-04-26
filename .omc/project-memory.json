@@ -269,6 +269,12 @@
       "type": "file"
     },
     {
+      "path": "src\\render\\stage.ts",
+      "accessCount": 4,
+      "lastAccessed": 1777207724708,
+      "type": "file"
+    },
+    {
       "path": "src\\geo\\hex.ts",
       "accessCount": 3,
       "lastAccessed": 1777182047430,
@@ -284,12 +290,6 @@
       "path": "tsconfig.json",
       "accessCount": 3,
       "lastAccessed": 1777193729888,
-      "type": "file"
-    },
-    {
-      "path": "src\\render\\stage.ts",
-      "accessCount": 3,
-      "lastAccessed": 1777195780834,
       "type": "file"
     },
     {
