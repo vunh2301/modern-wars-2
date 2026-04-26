@@ -10,8 +10,7 @@ import {
   createViewport,
   fitViewportToWorld,
   resizeViewport,
-  enableXPanClamp,
-  disableXPanClamp,
+  enableInfiniteWrap,
 } from './render/viewport';
 import { createHexLayer } from './render/hexLayer';
 import { createBenchmark } from './render/benchmark';
@@ -47,6 +46,8 @@ async function bootstrap(): Promise<void> {
 
   const viewport = createViewport(app);
   app.stage.addChild(viewport);
+  // Phase 6.7: infinite horizontal wrap (replaces tier-aware pan clamps).
+  enableInfiniteWrap(viewport);
 
   const hexLayer = createHexLayer(app);
   viewport.addChild(hexLayer.root);
@@ -58,19 +59,10 @@ async function bootstrap(): Promise<void> {
   const lut = buildColorLut(countries.countries);
   const availableTiers = new Set(Object.keys(manifest.tiles));
 
-  // Phase 6 D-6 (extended): all tiers wrap (chunked lazy build → 10km safe).
-  // Justin: "zoom 10km cuộn qua trái và phải không được bị đứng" (2026-04-26).
-  const TIERS_WITH_WRAP: ReadonlySet<string> = new Set(['50km', '25km', '10km']);
-  const applyPanClampForTier = (tierName: string): void => {
-    if (TIERS_WITH_WRAP.has(tierName)) disableXPanClamp(viewport);
-    else enableXPanClamp(viewport);
-  };
-
   // Initial: load coarsest tier for instant world view
   const initialTier = pickTier(1, availableTiers);
   const tier = await loadTier(initialTier);
   hexLayer.setTier(tier, lut);
-  applyPanClampForTier(initialTier);
 
   fitViewportToWorld(viewport, app);
 
@@ -164,7 +156,6 @@ async function bootstrap(): Promise<void> {
           const td = await loadTier(next);
           currentTier = next;
           hexLayer.setTier(td, lut);
-          applyPanClampForTier(currentTier);
           // Phase 6: re-cull immediately for new tier so first post-switch
           // frame already shows visible chunks (else 1-frame blank flash).
           cullNow();
