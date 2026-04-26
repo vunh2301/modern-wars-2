@@ -64,17 +64,24 @@ export function resizeViewport(app: Application, viewport: Viewport): void {
 }
 
 /**
- * Bật clamp pan để giới hạn viewport.center.x ∈ [-W/2, +W/2]. Dùng cho fine
- * tier không có wrap copies (10km) — tránh user pan vào vùng empty.
- * direction: 'x' chỉ clamp X, để Y free. Idempotent: gỡ clamp cũ trước
- * khi cài mới để không stack nhiều plugin instances qua nhiều LOD switch.
+ * Bật clamp pan để giới hạn viewport visible ⊆ [-W/2, +W/2] world x.
+ * Dùng cho fine tier (10km) không có wrap copies — tránh user pan thấy
+ * vùng empty.
+ *
+ * QUAN TRỌNG: KHÔNG pass `direction:'x'` — pixi-viewport (line 648 source)
+ * sẽ overwrite left/right thành `true` (= dùng default 0/worldWidth) khi
+ * direction được set, IGNORE giá trị explicit em truyền. Pass `top:null,
+ * bottom:null` để skip Y clamp.
+ *
+ * Idempotent: gỡ clamp cũ trước khi cài mới (tránh stack qua nhiều LOD switch).
  */
 export function enableXPanClamp(viewport: Viewport): void {
   viewport.plugins.remove('clamp');
   viewport.clamp({
     left: -WRAP_DISTANCE_PX / 2,
     right: WRAP_DISTANCE_PX / 2,
-    direction: 'x',
+    top: null,
+    bottom: null,
   });
 }
 

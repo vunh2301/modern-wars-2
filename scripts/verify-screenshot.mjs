@@ -116,14 +116,36 @@ await new Promise((r) => setTimeout(r, 2000));
 await page.screenshot({ path: `${OUT}/12-pan-left-180.png` });
 console.log('  → 12-pan-left-180.png (lng -180° / clamp test)');
 
-// Zoom 8× pan tới Russia far East (Cape Dezhnev ~169°E 66°N, có đất gần edge).
+// Zoom 8× tier 10km PAN PAST RIGHT EDGE — try lng 200° (out of range).
+// With clamp, viewport.center.x snapped so visible right ≤ +W/2. Screen
+// should show full hex content tới right edge, no empty bên phải.
 await page.evaluate(() => {
   window.__mwSetZoom?.(8);
-  window.__mwCenterOn?.(170, 65);
+  window.__mwCenterOn?.(200, 65);  // 200° > 180° → forces clamp
 });
 await new Promise((r) => setTimeout(r, 4000));
-await page.screenshot({ path: `${OUT}/13-zoom8-far-east.png` });
-console.log('  → 13-zoom8-far-east.png (Russia FE 170°E 65°N zoom 8× / 10km clamp test)');
+await page.screenshot({ path: `${OUT}/13-zoom8-right-clamp.png` });
+console.log('  → 13-zoom8-right-clamp.png (PAN PAST +180° / clamp test)');
+
+// Same but LEFT side: lng -200° to verify clamp doesn't block left.
+await page.evaluate(() => {
+  window.__mwSetZoom?.(8);
+  window.__mwCenterOn?.(-200, 65);  // -200° < -180° → forces clamp left
+});
+await new Promise((r) => setTimeout(r, 4000));
+await page.screenshot({ path: `${OUT}/13b-zoom8-left-clamp.png` });
+console.log('  → 13b-zoom8-left-clamp.png (PAN PAST -180° / clamp test left)');
+
+// 25km tier zoom 2.79× (Justin's exact zoom). Try multiple lng to find lằn.
+for (const [lng, lat] of [[160, 60], [175, 60], [178, 65], [-178, 65], [-170, 60]]) {
+  await page.evaluate(([z, lng, lat]) => {
+    window.__mwSetZoom?.(z);
+    window.__mwCenterOn?.(lng, lat);
+  }, [2.79, lng, lat]);
+  await new Promise((r) => setTimeout(r, 3000));
+  await page.screenshot({ path: `${OUT}/15-lan-${lng}-${lat}.png` });
+  console.log(`  → 15-lan-${lng}-${lat}.png (25km zoom 2.79×)`);
+}
 
 // Test Y pan free (zoom 1, pan vertically to Greenland).
 await page.evaluate(() => {

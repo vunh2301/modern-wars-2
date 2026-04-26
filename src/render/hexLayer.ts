@@ -102,19 +102,20 @@ function computeBorderEdges(
     countryByKey.set(key, h.countryId);
   }
 
-  const half = Math.floor(wrapHexCount / 2);
-  const qMin = -half;
+  const halfWrap = Math.floor(wrapHexCount / 2);
+  const qMin = -halfWrap;
   const qMax = qMin + wrapHexCount - 1;
 
-  // Wrap-aware neighbor lookup. Hex at q=qMax has right-neighbor q=qMax+1
-  // which doesn't exist in canonical range — but its wrap-equivalent q=qMin
-  // DOES (rendered at the next world-copy offset). Treat them as the same
-  // hex for border purposes → suppresses double-stroked seam at antimeridian.
+  // Wrap-aware neighbor lookup. Flat-top axial: y = -√3·size·(r + q/2). Khi
+  // q wrap qua wrapHexCount columns, r PHẢI adjust ±wrapHexCount/2 để giữ
+  // y khớp (geographic continuity). Trước đây em chỉ wrap q → lookup miss
+  // hex thực + draw rim border ở wrap seam → visible zigzag (Justin lằn).
   const lookup = (q: number, r: number): number | undefined => {
     let qq = q;
-    if (qq > qMax) qq -= wrapHexCount;
-    else if (qq < qMin) qq += wrapHexCount;
-    return countryByKey.get((qq + KEY_OFFSET) * 65536 + (r + KEY_OFFSET));
+    let rr = r;
+    if (qq > qMax) { qq -= wrapHexCount; rr += halfWrap; }
+    else if (qq < qMin) { qq += wrapHexCount; rr -= halfWrap; }
+    return countryByKey.get((qq + KEY_OFFSET) * 65536 + (rr + KEY_OFFSET));
   };
 
   const PERP_F = 0.5 / SQRT_3;
