@@ -41,7 +41,10 @@ import { kmToWorldPx, WRAP_DISTANCE_PX } from '../geo/projection';
 import { createHexShader } from './hexShader';
 
 const WRAP_OFFSETS: ReadonlyArray<number> = [-WRAP_DISTANCE_PX, 0, WRAP_DISTANCE_PX];
-const MAX_BUILT_INSTANCES = 24;
+// Hotfix 2026-04-26: 2-chunk margin can put ~36 chunk-instances visible at
+// once. LRU cap raised 24→48 so eviction never starves visible set.
+// Memory cost: ~48 × ~5 MB / Pixi instance ≈ 240 MB GPU buffers (under cap).
+const MAX_BUILT_INSTANCES = 48;
 
 const BORDER_COLOR = 0x05101a;
 const BORDER_ALPHA = 0.85;
@@ -366,15 +369,21 @@ export function createMeshHexLayer(app: Application): MeshHexLayer {
     const normMinX = bbox.minX - currentWrapShift;
     const normMaxX = bbox.maxX - currentWrapShift;
 
-    // 1-chunk margin (Phase 6 D-5) — covers cross-chunk borders + flicker.
+    // 2-chunk margin (Phase 7 hotfix 2026-04-26): pre-fetch chunks before
+    // they enter viewport — at fast pan, async fetch (~50ms) was outpaced by
+    // user motion → "ô vuông đen nháy" on iPhone. 2-chunk gives ~100ms head
+    // start at typical mobile fling velocity. Trade-off: ~2× more chunks in
+    // LRU pressure (still capped at 24).
     const sample = rbush.all()[0];
     const chunkW = sample ? sample.maxX - sample.minX : 0;
     const chunkH = sample ? sample.maxY - sample.minY : 0;
+    const marginX = chunkW * 2;
+    const marginY = chunkH * 2;
     const expanded = {
-      minX: normMinX - chunkW,
-      minY: bbox.minY - chunkH,
-      maxX: normMaxX + chunkW,
-      maxY: bbox.maxY + chunkH,
+      minX: normMinX - marginX,
+      minY: bbox.minY - marginY,
+      maxX: normMaxX + marginX,
+      maxY: bbox.maxY + marginY,
     };
 
     const nowEntries = rbush.search(expanded);
