@@ -15,11 +15,12 @@ const OCEAN_BG = 0x040d18;
 
 export async function createStage(): Promise<Application> {
   const app = new Application();
-  // Phase 7.8 hotfix (2026-04-26): default back to webgl. WGSL shader in
-  // hexShader.ts uses bind group bindings that don't match Pixi v8 Mesh
-  // conventions → WebGPU render đen. Tracking: needs Pixi-correct WGSL
-  // localUniforms layout. URL override ?renderer=webgpu kept for debug.
-  const rendererPref = (new URLSearchParams(location.search).get('renderer') ?? 'webgl') as 'webgl' | 'webgpu';
+  // Phase 7.8 (2026-04-26): default ?renderer=webgpu (iOS Safari 18.4+
+  // enables WebGPU mặc định trên iPhone). WGSL shader đã fix attribute
+  // inline trong fn args (Pixi v8 extractAttributesFromGpuProgram chỉ parse
+  // @location ở function args, không phải struct fields). Pixi v8 auto-fallback
+  // to WebGL2 nếu không hỗ trợ. URL override ?renderer=webgl forces fallback.
+  const rendererPref = (new URLSearchParams(location.search).get('renderer') ?? 'webgpu') as 'webgl' | 'webgpu';
   await app.init({
     preference: rendererPref,
     background: new Color(OCEAN_BG),

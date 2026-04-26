@@ -44,6 +44,14 @@ const GL_FRAGMENT = /* glsl */ `
   }
 `;
 
+// Pixi v8 WebGPU pipeline:
+//   - extractAttributesFromGpuProgram parses @location(...) ONLY from
+//     vertex fn args (NOT from struct fields). Must inline attributes.
+//   - autoAssignGlobalUniforms triggers when WGSL var name = "globalUniforms"
+//     at @group(0)@binding(0). Same cho localUniforms ở @group(1)@binding(0).
+//   - Struct field order phải khớp Pixi v8 globalUniformsBit / localUniformBit
+//     (canonical: uProjectionMatrix, uWorldTransformMatrix, uWorldColorAlpha,
+//     uResolution / uTransformMatrix, uColor, uRound).
 const GPU_VERTEX = /* wgsl */ `
 struct GlobalUniforms {
   uProjectionMatrix: mat3x3<f32>,
@@ -61,38 +69,33 @@ struct LocalUniforms {
 @group(0) @binding(0) var<uniform> globalUniforms: GlobalUniforms;
 @group(1) @binding(0) var<uniform> localUniforms: LocalUniforms;
 
-struct VertexInput {
-  @location(0) aTemplate: vec2<f32>,
-  @location(1) aInstancePos: vec2<f32>,
-  @location(2) aInstanceColor: vec4<f32>,
-}
-
 struct VertexOutput {
   @builtin(position) position: vec4<f32>,
   @location(0) vColor: vec4<f32>,
 }
 
 @vertex
-fn main(input: VertexInput) -> VertexOutput {
+fn main(
+  @location(0) aTemplate: vec2<f32>,
+  @location(1) aInstancePos: vec2<f32>,
+  @location(2) aInstanceColor: vec4<f32>,
+) -> VertexOutput {
   var output: VertexOutput;
-  let worldPos = input.aInstancePos + input.aTemplate;
+  let worldPos = aInstancePos + aTemplate;
   let mvp = globalUniforms.uProjectionMatrix * globalUniforms.uWorldTransformMatrix * localUniforms.uTransformMatrix;
   let pos = mvp * vec3<f32>(worldPos, 1.0);
   output.position = vec4<f32>(pos.xy, 0.0, 1.0);
-  output.vColor = input.aInstanceColor;
+  output.vColor = aInstanceColor;
   return output;
 }
 `;
 
 const GPU_FRAGMENT = /* wgsl */ `
-struct VertexOutput {
-  @builtin(position) position: vec4<f32>,
-  @location(0) vColor: vec4<f32>,
-}
-
 @fragment
-fn main(input: VertexOutput) -> @location(0) vec4<f32> {
-  return input.vColor;
+fn main(
+  @location(0) vColor: vec4<f32>,
+) -> @location(0) vec4<f32> {
+  return vColor;
 }
 `;
 
