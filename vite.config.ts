@@ -17,6 +17,19 @@ export default defineConfig({
       },
     },
   },
+  // Phase 8: worker pool — ESM worker output for browser-modern targets.
+  // decoder.worker.ts is the entry point (Vite rewrites .ts → hashed .js at build).
+  // Worker URL pattern: new URL('./decoder.worker.ts', import.meta.url) — relative,
+  // NOT aliased, for Vite worker plugin detection.
+  // ?worker and ?engine are orthogonal URL params (decode path vs render path).
+  worker: {
+    format: 'es',
+    rollupOptions: {
+      output: {
+        entryFileNames: 'assets/[name]-[hash].worker.js',
+      },
+    },
+  },
   server: {
     port: 5173,
     strictPort: true,
