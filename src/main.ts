@@ -12,6 +12,7 @@ import {
   fitViewportToWorld,
   resizeViewport,
   enableInfiniteWrap,
+  enableWrapCopyPanClamp,
 } from './render/viewport';
 import { createHexLayer } from './render/hexLayer';
 import { createMeshHexLayer } from './render/meshHexLayer';
@@ -66,6 +67,13 @@ async function bootstrap(): Promise<void> {
   // Phase 7: engine selector. Default = mesh (Phase 7 path). ?engine=particles
   // falls back to Phase 6 ParticleContainer renderer (rollback path D-8).
   const engine = (new URLSearchParams(location.search).get('engine') ?? 'mesh') as 'mesh' | 'particles';
+
+  // Particles engine: pre-emitted 3 wrap copies cover ±1.5W → clamp pan at
+  // ±W to stay within coverage (else fast pan past = black map). Mesh engine
+  // uses dynamic wrap-shift, no clamp needed.
+  if (engine === 'particles') {
+    enableWrapCopyPanClamp(viewport);
+  }
 
   // Load common data
   const [manifest, countries] = await Promise.all([loadManifest(), loadCountries()]);

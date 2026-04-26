@@ -77,6 +77,22 @@ export function resizeViewport(app: Application, viewport: Viewport): void {
  * This function previously snapped viewport position; now it's a no-op
  * (kept for API compat — main.ts still calls). Y bounds via createViewport.
  */
+/**
+ * Pan clamp at ±W (= canonical + 1 wrap copy on each side).
+ * Used by ?engine=particles where Phase 6 pre-emits 3 wrap copies (offsets
+ * [-W, 0, +W]) covering visible world ∈ [-1.5W, +1.5W]. Without clamp,
+ * fast drag could push viewport.center.x past ±1.5W → black map.
+ */
+export function enableWrapCopyPanClamp(viewport: Viewport): void {
+  viewport.plugins.remove('clamp');
+  viewport.clamp({
+    left: -WRAP_DISTANCE_PX,
+    right: WRAP_DISTANCE_PX,
+    top: null,
+    bottom: null,
+  });
+}
+
 export function enableInfiniteWrap(_viewport: Viewport): void {
   // Intentional no-op — wrap rendering handled in hexLayer.updateVisibility.
   void _viewport;

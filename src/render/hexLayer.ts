@@ -77,9 +77,11 @@ export interface HexLayerStats {
   lastTierSwitchMs: number;
 }
 
-const HEX_TEXTURE_SIDE = 32; // px — hex side length in render texture
-const HEX_TEX_W = Math.ceil(2 * HEX_TEXTURE_SIDE);            // 64
-const HEX_TEX_H = Math.ceil(SQRT_3 * HEX_TEXTURE_SIDE);       // 55
+// Bump 32→64 (2026-04-26): higher base texture resolution reduces AA fringe
+// "vết border các cell mờ" visible at low zoom in particles engine.
+const HEX_TEXTURE_SIDE = 64; // px — hex side length in render texture
+const HEX_TEX_W = Math.ceil(2 * HEX_TEXTURE_SIDE);            // 128
+const HEX_TEX_H = Math.ceil(SQRT_3 * HEX_TEXTURE_SIDE);       // 111
 
 const BORDER_COLOR = 0x05101a;
 const BORDER_ALPHA = 0.85;
