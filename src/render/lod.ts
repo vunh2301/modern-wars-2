@@ -15,7 +15,10 @@ const ZOOM_BANDS: ZoomBand[] = [
   { minZoom: 16, tier: '2km' },
   { minZoom: 8, tier: '5km' },
   { minZoom: 4, tier: '10km' },
-  { minZoom: 2, tier: '25km' },
+  // 2026-04-26 Justin feedback: 25km xuống tới zoom 1× (was 2×). 50km
+  // chỉ tier-default cho fit-to-screen (zoom <1×). Trade-off: thêm chunks
+  // 25km ở 1×-2× nhưng đỡ phải chuyển tier khi user zoom in lần đầu.
+  { minZoom: 1, tier: '25km' },
   { minZoom: 0, tier: '50km' },
 ];
 
