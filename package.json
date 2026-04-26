@@ -11,6 +11,7 @@
     "lint": "eslint . --ext .ts,.tsx --max-warnings=0",
     "typecheck": "tsc --noEmit",
     "bake": "tsx scripts/bake-hex-tiers.ts",
+    "bake:chunks": "tsx scripts/bake-chunks.ts",
     "test": "vitest run"
   },
   "dependencies": {
