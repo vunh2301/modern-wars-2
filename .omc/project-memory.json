@@ -174,20 +174,20 @@
   "hotPaths": [
     {
       "path": "src\\main.ts",
-      "accessCount": 44,
-      "lastAccessed": 1777194533376,
+      "accessCount": 48,
+      "lastAccessed": 1777204005851,
       "type": "file"
     },
     {
       "path": "src\\render\\hexLayer.ts",
-      "accessCount": 42,
-      "lastAccessed": 1777195780775,
+      "accessCount": 45,
+      "lastAccessed": 1777204233094,
       "type": "file"
     },
     {
       "path": "src\\render\\viewport.ts",
-      "accessCount": 20,
-      "lastAccessed": 1777193790867,
+      "accessCount": 24,
+      "lastAccessed": 1777204240834,
       "type": "file"
     },
     {
@@ -198,8 +198,8 @@
     },
     {
       "path": "src",
-      "accessCount": 16,
-      "lastAccessed": 1777193793248,
+      "accessCount": 17,
+      "lastAccessed": 1777203923502,
       "type": "directory"
     },
     {

@@ -78,18 +78,33 @@ export function resizeViewport(app: Application, viewport: Viewport): void {
  * (kept for API compat — main.ts still calls). Y bounds via createViewport.
  */
 /**
- * Pan clamp at ±W (= canonical + 1 wrap copy on each side).
- * Used by ?engine=particles where Phase 6 pre-emits 3 wrap copies (offsets
- * [-W, 0, +W]) covering visible world ∈ [-1.5W, +1.5W]. Without clamp,
- * fast drag could push viewport.center.x past ±1.5W → black map.
+ * Pan clamp at ±W + snap-on-moved-end → infinite wrap for particles engine.
+ * Phase 6 pre-emits 3 wrap copies covering world ∈ [-1.5W, +1.5W]. Clamp
+ * keeps viewport within coverage. Snap on release (when |cx| > W/2) wraps
+ * viewport back to canonical range — user perceives continuous loop.
  */
 export function enableWrapCopyPanClamp(viewport: Viewport): void {
+  const W = WRAP_DISTANCE_PX;
   viewport.plugins.remove('clamp');
   viewport.clamp({
-    left: -WRAP_DISTANCE_PX,
-    right: WRAP_DISTANCE_PX,
+    left: -W,
+    right: W,
     top: null,
     bottom: null,
+  });
+  let snapping = false;
+  viewport.on('moved-end', () => {
+    if (snapping) return;
+    const cx = viewport.center.x;
+    if (cx > W / 2) {
+      snapping = true;
+      viewport.moveCenter(cx - W, viewport.center.y);
+      snapping = false;
+    } else if (cx < -W / 2) {
+      snapping = true;
+      viewport.moveCenter(cx + W, viewport.center.y);
+      snapping = false;
+    }
   });
 }
 
