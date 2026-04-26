@@ -81,6 +81,13 @@ async function bootstrap(): Promise<void> {
     // Fire manually để LOD switcher pick up tier change cho headless test.
     viewport.emit('zoomed', { type: 'animate', viewport });
   };
+  w.__mwCenterOn = (lng: number, lat: number): void => {
+    // Mercator → world px (Y-negated for screen-down).
+    const lngRad = (lng * Math.PI) / 180;
+    const latClamp = Math.max(-85, Math.min(85, lat));
+    const yMerc = Math.log(Math.tan(Math.PI / 4 + (latClamp * Math.PI) / 360));
+    viewport.moveCenter(lngRad * 1024, -yMerc * 1024);
+  };
 
   const updateHud = (): void => {
     w.__mwZoom = viewport.scale.x;

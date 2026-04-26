@@ -199,8 +199,16 @@ function loadCountries(geojsonPath: string): Country[] {
   let nextId = 1; // 0 reserved for ocean
 
   for (const f of fc.features) {
-    const code = f.properties.ISO_A2 || f.properties.ISO_A2_EH || '';
-    if (!code || code === '-99' || code.length !== 2) continue;
+    // Justin 2026-04-26 "mất nước Pháp". NE 50m gắn ISO_A2='-99' (no-code
+    // placeholder) cho France/Norway/… nhưng có ISO_A2_EH chuẩn. Code cũ
+    // dùng `ISO_A2 || ISO_A2_EH` → lấy '-99' rồi reject. Fix: chỉ chấp
+    // nhận ISO_A2 nếu valid 2-char code, else fall back ISO_A2_EH.
+    const rawA2 = f.properties.ISO_A2;
+    const rawEH = f.properties.ISO_A2_EH;
+    const a2Valid = rawA2 && rawA2 !== '-99' && rawA2.length === 2 ? rawA2 : '';
+    const ehValid = rawEH && rawEH !== '-99' && rawEH.length === 2 ? rawEH : '';
+    const code = a2Valid || ehValid;
+    if (!code) continue;
     if (EXCLUDE_CODES.has(code)) continue;
     if (seen.has(code)) continue;
     seen.add(code);
@@ -335,18 +343,27 @@ function bakeTier(
   const minMercX = lngLatToMercator(-180, 0)[0];
   const maxMercX = lngLatToMercator(180, 0)[0];
 
-  // q range driven by mercX width / horizSpacing
+  // q range driven by mercX width / horizSpacing.
   const qMin = Math.floor(minMercX / horizSpacing) - 1;
   const qMax = Math.ceil(maxMercX / horizSpacing) + 1;
-  const rMin = Math.floor(minMercY / vertSpacing) - 1;
-  const rMax = Math.ceil(maxMercY / vertSpacing) + 1;
+
+  // Justin 2026-04-26 "alaska, russia bị cắt" lằn xéo. Root cause: axial hex
+  // y = SQRT_3 × size × (r + q/2). Fixed r range độc lập q tạo parallelogram
+  // sheared coverage → ở q âm cực (lng −180°), max lat phủ chỉ tới ~53°N.
+  // Fix: r range PER q sao cho mỗi cột q phủ đủ y ∈ [minMercY, maxMercY].
+  const rBaseLo = minMercY / vertSpacing;
+  const rBaseHi = maxMercY / vertSpacing;
 
   const hexes: BakedHex[] = [];
   let total = 0;
   let oceanSkipped = 0;
   for (let q = qMin; q <= qMax; q++) {
-    for (let r = rMin; r <= rMax; r++) {
+    const halfQ = q / 2;
+    const rLo = Math.floor(rBaseLo - halfQ) - 1;
+    const rHi = Math.ceil(rBaseHi - halfQ) + 1;
+    for (let r = rLo; r <= rHi; r++) {
       const [mx, my] = axialToMercator(q, r, sizeRad);
+      if (mx < minMercX || mx > maxMercX) continue;
       if (my < minMercY || my > maxMercY) continue;
       const [lng, lat] = mercatorToLngLat(mx, my);
       total++;

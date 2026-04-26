@@ -42,6 +42,15 @@ for (const { name, z } of zoomLevels) {
   console.log(`  → ${name}.png (zoom ${z}×)`);
 }
 
+// Pan to Europe (Paris ~ 2°E, 48°N) at zoom 4× to verify FR + neighbors.
+await page.evaluate(() => {
+  window.__mwSetZoom?.(4);
+  window.__mwCenterOn?.(2, 48);
+});
+await new Promise((r) => setTimeout(r, 4000));
+await page.screenshot({ path: `${OUT}/05-europe-zoom-4.png` });
+console.log('  → 05-europe-zoom-4.png (Paris @ zoom 4×)');
+
 console.log('\n=== LOGS ===');
 for (const l of logs) console.log(l);
 
