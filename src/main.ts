@@ -20,7 +20,7 @@ import { createBenchmark } from './render/benchmark';
 import { loadManifest } from './data/manifest';
 import { loadCountries } from './data/countries';
 import { loadTier } from './data/tiers';
-import { loadChunksManifest, computeColorLutHash } from './data/chunks';
+import { loadChunksManifest, computeColorLutHash, getWorkerPoolStats, getDecodeMode, getWorkerPoolSize } from './data/chunks';
 import { buildColorLut } from './render/colors';
 import { pickTier } from './render/lod';
 
@@ -416,7 +416,17 @@ queueMicrotask(() => {
         `build: ${stats.lastBuildMs.toFixed(1)}ms | cull: ${stats.lastCullMs.toFixed(1)}ms | switch: ${stats.lastTierSwitchMs.toFixed(1)}ms`
       : '';
 
-    hud.textContent = [line1, memStr, chunkStr].filter(Boolean).join('\n');
+    // Phase 8: worker pool stats line.
+    // NOTE: performance.memory = main thread only. Worker heap excluded.
+    // Total process memory = main + Σ(worker heaps). Use DevTools for full view.
+    const poolStats = getWorkerPoolStats();
+    const decodeMode = getDecodeMode();
+    const poolSize = getWorkerPoolSize();
+    const workerStr = decodeMode === 'worker' && poolStats
+      ? `decode: worker(${poolSize}) | active: ${poolStats.activeJobs} | queue: ${poolStats.queueDepth} | post p95: ${poolStats.p95LatencyMs.toFixed(1)}ms`
+      : `decode: main`;
+
+    hud.textContent = [line1, memStr, chunkStr, workerStr].filter(Boolean).join('\n');
 
     // Color-code: red khi memory peak > 250MB target (Justin 2026-04-26).
     if (memNowMb !== null && memPeakMb > 250) {
