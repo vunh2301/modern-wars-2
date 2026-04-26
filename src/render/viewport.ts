@@ -26,11 +26,10 @@ export function createViewport(app: Application): Viewport {
     .pinch()
     .wheel()
     .decelerate({ friction: 0.93 })
-    .clampZoom({ minScale: 0.20, maxScale: 8 })
-    // Clamp pan to canonical world width so user never sees empty space
-    // beyond wrap copies. Wrap copies (50km/25km only) handle visual seam
-    // when viewport extends past canonical edge near boundary.
-    .clamp({ direction: 'x' });
+    .clampZoom({ minScale: 0.20, maxScale: 8 });
+  // Pan unrestricted — em từng dùng .clamp() nhưng pixi-viewport assume
+  // world ∈ [0, W] còn hex content ở [-W/2, +W/2] → block pan trái.
+  // Wrap copies cho 50km/25km tự lo seamless visual gần edge.
 
   return viewport;
 }

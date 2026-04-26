@@ -31,7 +31,6 @@ import { axialToPx, SQRT_3 } from '../geo/hex';
 import {
   kmToWorldPx,
   WRAP_DISTANCE_PX,
-  WRAP_Y_SHIFT_PX,
   WRAP_HEX_COUNT_BASE,
   WRAP_BASE_TIER_KM,
 } from '../geo/projection';
@@ -166,10 +165,11 @@ export function createHexLayer(app: Application): HexLayer {
     const hexSizeWorldPx = kmToWorldPx(tier.sizeKm);
     const scale = hexSizeWorldPx / HEX_TEXTURE_SIDE;
 
-    // Each entry = [Δx, Δy]. Y shift compensates for flat-top axial column
-    // y-drift across full world wrap (see WRAP_Y_SHIFT_PX in projection.ts).
+    // Wrap copies — Y shift = 0 vì hex GRID positions từ bake đã PiP đúng
+    // theo lng/lat Mercator, không cần shift Y để khớp flat-top axial drift.
+    // (Trước em thử Y shift = -W/√3 nhưng Justin thấy "lệch chỗ cắt map".)
     const offsets: ReadonlyArray<readonly [number, number]> = WRAP_TIER_NAMES.has(tier.name)
-      ? [[-WRAP_DISTANCE_PX, -WRAP_Y_SHIFT_PX], [0, 0], [WRAP_DISTANCE_PX, WRAP_Y_SHIFT_PX]]
+      ? [[-WRAP_DISTANCE_PX, 0], [0, 0], [WRAP_DISTANCE_PX, 0]]
       : [[0, 0]];
 
     const N = tier.hexes.length;
