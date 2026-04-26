@@ -87,9 +87,11 @@ export interface MeshHexLayer {
   /** Phase 8.3: wire cullNow reference for static-viewport rAF retry driver. */
   setCullNow(fn: () => void): void;
   /** Phase 8 H3 cold-cache stress: clear ChunkCache, dispatch N decode jobs
-   *  through the worker pool sequentially (or concurrently up to pool size),
-   *  return roundtrip latencies in ms. Used by bench scenario 4. */
-  forceWorkerStress(jobCount: number): Promise<number[]>;
+   *  through the worker pool sequentially (or concurrently up to pool size).
+   *  Returns { latencies: number[], failedCount: number } where latencies are
+   *  per-job roundtrip ms and failedCount is the number of jobs that errored.
+   *  Used by bench scenario 4. */
+  forceWorkerStress(jobCount: number): Promise<{ latencies: number[]; failedCount: number }>;
   destroy(): void;
 }
 
@@ -607,16 +609,17 @@ export function createMeshHexLayer(app: Application): MeshHexLayer {
    *
    * If no manifest is loaded yet or the active tier is empty, returns [].
    */
-  const forceWorkerStress = async (jobCount: number): Promise<number[]> => {
+  const forceWorkerStress = async (jobCount: number): Promise<{ latencies: number[]; failedCount: number }> => {
     if (!manifest) manifest = await loadChunksManifest();
-    if (!currentTierName) return [];
+    if (!currentTierName) return { latencies: [], failedCount: 0 };
     const tier = manifest.tiers[currentTierName];
-    if (!tier || tier.chunks.length === 0) return [];
+    if (!tier || tier.chunks.length === 0) return { latencies: [], failedCount: 0 };
 
     chunkCache.clear();
 
     const entries = tier.chunks;
     const latencies: number[] = [];
+    let failedCount = 0;
     const stressAbort = new AbortController();
     for (let i = 0; i < jobCount; i++) {
       const entry = entries[i % entries.length]!;
@@ -626,13 +629,14 @@ export function createMeshHexLayer(app: Application): MeshHexLayer {
       } catch (err) {
         // Abort on capability fallback or hard error so caller sees a clear signal.
         if (err instanceof DOMException && err.name === 'AbortError') break;
-        // Don't fail the whole loop on transient errors — record sentinel -1.
+        // Don't fail the whole loop on transient errors — count as failure.
+        failedCount++;
         latencies.push(-1);
         continue;
       }
       latencies.push(performance.now() - t0);
     }
-    return latencies;
+    return { latencies, failedCount };
   };
 
   return {

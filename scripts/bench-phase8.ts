@@ -9,8 +9,9 @@
  *   - FPS p95 ≥ 135 (Phase 7.9 baseline 140.8, 4% headroom for worker overhead)
  *   - tier-switch p95 < 5ms
  *   - chunk-build p95 < 5ms
- *   - postMessage roundtrip p95 < 5ms (new Phase 8 gate)
- *   - memory_settled < 300MB
+ *   - postMessage roundtrip p95 < 10ms (real Phase 8 measurement: p95 ≈ 7-8ms)
+ *   - memory_settled < 400MB (~25% headroom over measured 312.7 MB settled)
+ *   - scenario4_successful_jobs ≥ 99% (silent decode failures now detected)
  *   - Worker bundle gzip < 50KB (build artifact assertion)
  *   - A/B parity: ?worker=off results match Phase 7.9 baseline ±2%
  *
@@ -56,6 +57,8 @@ interface WorkerLatencyResult {
   name: string;
   workerMode: 'on' | 'off';
   jobCount: number;
+  successCount: number;
+  failedCount: number;
   p50Ms: number;
   p95Ms: number;
   p99Ms: number;
@@ -303,6 +306,8 @@ async function scenarioWorkerLatency(
       name: 'worker_latency_1000_jobs',
       workerMode,
       jobCount: 0,
+      successCount: 0,
+      failedCount: 0,
       p50Ms: 0, p95Ms: 0, p99Ms: 0, maxMs: 0,
       queueFullRejects: 0,
     };
@@ -314,17 +319,22 @@ async function scenarioWorkerLatency(
   await page.evaluate(() => (window as any).__mwBenchReset?.());
 
   const STRESS_COUNT = 1000;
-  // Drive forceWorkerStress in the page context. Returns Float64-style array
-  // of per-job latencies in ms (sentinel -1 for transient errors).
-  const latencies: number[] = await page.evaluate(async (n: number) => {
+  // Drive forceWorkerStress in the page context. Returns { latencies, failedCount }
+  // where latencies are per-job roundtrip ms and failedCount counts decode errors.
+  const stressResult = await page.evaluate(async (n: number) => {
     const fn = (window as any).__mwForceWorkerStress as
-      | ((count: number) => Promise<number[]>)
+      | ((count: number) => Promise<{ latencies: number[]; failedCount: number }>)
       | undefined;
-    if (!fn) return [] as number[];
+    if (!fn) return { latencies: [] as number[], failedCount: 0 };
     return await fn(n);
   }, STRESS_COUNT);
 
+  const { latencies, failedCount } = stressResult;
+  // Treat any sentinel -1 as decode failure (belt+suspenders alongside failedCount).
+  const negativeCount = latencies.filter((v) => v < 0).length;
+  const totalFailed = Math.max(failedCount, negativeCount);
   const valid = latencies.filter((v) => v > 0).sort((a, b) => a - b);
+  const successCount = valid.length;
   const p50 = valid.length ? valid[Math.floor(valid.length * 0.5)] ?? 0 : 0;
   const p95 = valid.length ? valid[Math.floor(valid.length * 0.95)] ?? 0 : 0;
   const p99 = valid.length ? valid[Math.floor(valid.length * 0.99)] ?? 0 : 0;
@@ -337,6 +347,8 @@ async function scenarioWorkerLatency(
     name: 'worker_latency_1000_jobs',
     workerMode,
     jobCount: workerStats.totalJobs ?? valid.length,
+    successCount,
+    failedCount: totalFailed,
     p50Ms: round(p50),
     p95Ms: round(p95),
     p99Ms: round(p99),
@@ -462,11 +474,10 @@ function buildGates(
   // shaves dispatch overhead.
   const POST_MSG_TARGET = 10;
   // Memory settled target — pinch-zoom cycles thrash 4 tiers × 256-entry cache.
-  // Real numbers: ~135 MB pan-only, ~260 MB antimeridian, ~493 MB pinch_zoom
-  // (worst case: cache full + 1000-job stress allocations + GPU buffers).
-  // Gate at 550 MB until Phase 9 implements tier-aware cache eviction.
-  // Phase 8 retro should track this as a P1 follow-up.
-  const MEMORY_SETTLED_TARGET = 550;
+  // Real measurement: settled 312.7 MB (Phase 8 rev 2 bench run).
+  // Gate at 400 MB gives ~25% headroom above measured value.
+  // Phase 9 tier-aware cache eviction should push this lower.
+  const MEMORY_SETTLED_TARGET = 400;
   const BUNDLE_GZIP_TARGET = 50;
   const AB_PARITY_PCT = 2; // ±2%
 
@@ -531,6 +542,23 @@ function buildGates(
     target: 'totalJobs > 0 (worker path actually exercised)',
     actual: `totalJobs=${workerTotalJobs}, scenario4_jobs=${latencyJobCount}`,
     pass: dispatched > 0,
+    hard: true,
+  });
+
+  // M2: scenario 4 must have ≥99% successful decodes. Broken decode returning
+  // fast ok:false results previously went undetected. Also fail if any
+  // sentinel -1 latencies were observed (belt+suspenders decode failure check).
+  const sc4SuccessCount = onResult.latency?.successCount ?? 0;
+  const sc4FailedCount = onResult.latency?.failedCount ?? 0;
+  const sc4Total = sc4SuccessCount + sc4FailedCount;
+  const sc4SuccessRate = sc4Total > 0 ? sc4SuccessCount / sc4Total : 1;
+  gates.push({
+    name: 'scenario4_successful_jobs_gte_99pct',
+    target: '≥ 99% of scenario 4 jobs succeed (no silent decode failures)',
+    actual: sc4Total > 0
+      ? `${sc4SuccessCount}/${sc4Total} (${(sc4SuccessRate * 100).toFixed(1)}%)`
+      : 'n/a (worker=on only)',
+    pass: sc4Total === 0 || sc4SuccessRate >= 0.99,
     hard: true,
   });
 
