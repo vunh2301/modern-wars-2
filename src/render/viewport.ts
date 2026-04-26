@@ -6,7 +6,7 @@
  */
 import type { Application } from 'pixi.js';
 import { Viewport } from 'pixi-viewport';
-import { worldBoundsPx } from '../geo/projection';
+import { worldBoundsPx, WRAP_DISTANCE_PX } from '../geo/projection';
 
 export function createViewport(app: Application): Viewport {
   const bounds = worldBoundsPx();
@@ -15,7 +15,8 @@ export function createViewport(app: Application): Viewport {
     events: (app.renderer as any).events,
     screenWidth: app.screen.width,
     screenHeight: app.screen.height,
-    worldWidth: bounds.width,
+    // worldWidth = wrap-aligned hex grid span (slightly > 2π·R for hex pitch fit).
+    worldWidth: WRAP_DISTANCE_PX,
     worldHeight: bounds.height,
     passiveWheel: false,
   });
@@ -25,9 +26,11 @@ export function createViewport(app: Application): Viewport {
     .pinch()
     .wheel()
     .decelerate({ friction: 0.93 })
-    // Justin 2026-04-26: minScale 0.20× (was 0.05); maxScale 8× (was 32) —
-    // các tier ≤ 5km chưa bake, zoom > 8 nhồi 10km tier crash iPhone.
-    .clampZoom({ minScale: 0.20, maxScale: 8 });
+    .clampZoom({ minScale: 0.20, maxScale: 8 })
+    // Clamp pan to canonical world width so user never sees empty space
+    // beyond wrap copies. Wrap copies (50km/25km only) handle visual seam
+    // when viewport extends past canonical edge near boundary.
+    .clamp({ direction: 'x' });
 
   return viewport;
 }

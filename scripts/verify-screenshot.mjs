@@ -88,6 +88,16 @@ await new Promise((r) => setTimeout(r, 4000));
 await page.screenshot({ path: `${OUT}/09-max-zoom.png` });
 console.log('  → 09-max-zoom.png (Paris @ zoom 8× = max)');
 
+// Sanity: pan to Asia interior (lng 100°E lat 50°N) at 50km tier.
+// If lằn appears here too, it's NOT wrap-related (Asia far from antimeridian).
+await page.evaluate(() => {
+  window.__mwSetZoom?.(1);
+  window.__mwCenterOn?.(100, 50);
+});
+await new Promise((r) => setTimeout(r, 3000));
+await page.screenshot({ path: `${OUT}/10-asia-50km.png` });
+console.log('  → 10-asia-50km.png (Asia interior 100°E/50°N @ 50km)');
+
 console.log('\n=== LOGS ===');
 for (const l of logs) console.log(l);
 

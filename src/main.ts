@@ -13,7 +13,7 @@ import { loadCountries } from './data/countries';
 import { loadTier } from './data/tiers';
 import { buildColorLut } from './render/colors';
 import { pickTier } from './render/lod';
-import { WRAP_DISTANCE_PX } from './geo/projection';
+import { WRAP_DISTANCE_PX, WRAP_Y_SHIFT_PX } from './geo/projection';
 
 async function bootstrap(): Promise<void> {
   performance.mark('boot-start');
@@ -125,33 +125,18 @@ async function bootstrap(): Promise<void> {
     }, 250);
   };
 
-  // World wrap — wrap distance match hex pitch alignment (projection.ts).
-  // Snap viewport.center.x by ±W when |cx| > W/2 → invisible because hexLayer
-  // renders identical content at ±W offsets (coarse tiers only).
-  const WORLD_W = WRAP_DISTANCE_PX;
-  let wrapping = false;
-  const wrapCenter = (): void => {
-    if (wrapping) return;
-    const cx = viewport.center.x;
-    if (cx > WORLD_W / 2) {
-      wrapping = true;
-      viewport.moveCenter(cx - WORLD_W, viewport.center.y);
-      wrapping = false;
-    } else if (cx < -WORLD_W / 2) {
-      wrapping = true;
-      viewport.moveCenter(cx + WORLD_W, viewport.center.y);
-      wrapping = false;
-    }
-  };
+  // World wrap: hexLayer renders 3 copies at offsets ±W (50km/25km tiers).
+  // User pan smoothly into wrap copies — user may pan total ±1.5W before
+  // seeing empty edge. NO viewport.center snap (Justin 2026-04-26 "khựng
+  // giật ngược camera" — snap jerks UX).
+  void WRAP_DISTANCE_PX;
+  void WRAP_Y_SHIFT_PX;
 
   viewport.on('zoomed', () => {
     updateHud();
     maybeSwitchLod();
   });
-  viewport.on('moved', () => {
-    wrapCenter();
-    updateHud();
-  });
+  viewport.on('moved', updateHud);
 
   // FPS sampler — Pixi Application.ticker.FPS already smoothed.
   w.__mwApp = app;

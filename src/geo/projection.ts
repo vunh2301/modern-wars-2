@@ -51,6 +51,12 @@ export const WRAP_HEX_COUNT_BASE: number = (() => {
 export const WRAP_DISTANCE_PX: number =
   WRAP_HEX_COUNT_BASE * 1.5 * kmToWorldPx(WRAP_BASE_TIER_KM);
 
+// Flat-top axial: y = -√3·size·(r + q/2). Khi q tăng wrapHexCount columns,
+// y shifts -√3·size·wrapHexCount/2. Wrap copies must shift Y để khớp;
+// nếu không, hexes ở seam misaligned vertically → visible "lằn" zigzag.
+// Tier-independent vì product (size × wrapHexCount) constant = WRAP_DISTANCE_PX/1.5.
+export const WRAP_Y_SHIFT_PX: number = -WRAP_DISTANCE_PX / Math.sqrt(3);
+
 /** World total bounds in pixels (Mercator clamped at ±MAX_LAT). Y inverted for screen-down. */
 export function worldBoundsPx(): { minX: number; minY: number; maxX: number; maxY: number; width: number; height: number } {
   const minX = -Math.PI * WORLD_SCALE_PX;

@@ -28,11 +28,16 @@ import {
 } from 'pixi.js';
 import type { TierData, HexRecord } from '../data/tiers';
 import { axialToPx, SQRT_3 } from '../geo/hex';
-import { kmToWorldPx, WRAP_DISTANCE_PX, WRAP_HEX_COUNT_BASE, WRAP_BASE_TIER_KM } from '../geo/projection';
+import {
+  kmToWorldPx,
+  WRAP_DISTANCE_PX,
+  WRAP_Y_SHIFT_PX,
+  WRAP_HEX_COUNT_BASE,
+  WRAP_BASE_TIER_KM,
+} from '../geo/projection';
 
-// Tiers nhẹ render 3 wrap copies (seamless pan qua antimeridian); tier
-// fine ≤ 10km giữ 1 copy để tránh OOM trên mobile (Justin 2026-04-26
-// "zoom in hết cỡ cũng bị crash" — 1.25M × 3 = 3.75M particles vượt iPhone GPU).
+// Coarse tiers (50km/25km) get wrap copies với Y shift để khớp flat-top axial.
+// 10km tier skip wrap để tránh OOM iPhone (1.25M × 3 = 3.75M particles).
 const WRAP_TIER_NAMES: ReadonlySet<string> = new Set(['50km', '25km']);
 
 export interface HexLayer {
@@ -147,26 +152,26 @@ export function createHexLayer(app: Application): HexLayer {
 
   const texture = makeHexTexture(app);
 
-  let particleLayers: ParticleContainer[] = [];
-  let borderLayers: Graphics[] = [];
+  // ONE ParticleContainer + ONE Graphics chứa cả 3 wrap copies. Trước em
+  // tách riêng 3 PC + 3 Graphics → mỗi mesh anti-alias độc lập, edge giữa
+  // 2 mesh hiện zigzag (Justin 2026-04-26). Gộp về 1 mesh → batch rendering
+  // → AA pass duy nhất → seam invisible.
+  let particles: ParticleContainer | null = null;
+  let borders: Graphics | null = null;
 
   const setTier = (tier: TierData, lut: Uint32Array): void => {
-    for (const l of particleLayers) l.destroy({ children: true });
-    for (const b of borderLayers) b.destroy();
-    particleLayers = [];
-    borderLayers = [];
+    if (particles) { particles.destroy({ children: true }); particles = null; }
+    if (borders) { borders.destroy(); borders = null; }
 
     const hexSizeWorldPx = kmToWorldPx(tier.sizeKm);
     const scale = hexSizeWorldPx / HEX_TEXTURE_SIDE;
 
-    // Wrap copies only for coarse tiers — fine tiers stay single-copy to fit
-    // mobile GPU memory budget. WRAP_DISTANCE_PX = exact integer multiple of
-    // 50km hex pitch → seamless join at antimeridian.
-    const offsets = WRAP_TIER_NAMES.has(tier.name)
-      ? [-WRAP_DISTANCE_PX, 0, WRAP_DISTANCE_PX]
-      : [0];
+    // Each entry = [Δx, Δy]. Y shift compensates for flat-top axial column
+    // y-drift across full world wrap (see WRAP_Y_SHIFT_PX in projection.ts).
+    const offsets: ReadonlyArray<readonly [number, number]> = WRAP_TIER_NAMES.has(tier.name)
+      ? [[-WRAP_DISTANCE_PX, -WRAP_Y_SHIFT_PX], [0, 0], [WRAP_DISTANCE_PX, WRAP_Y_SHIFT_PX]]
+      : [[0, 0]];
 
-    // Pre-compute geometry (positions, tints, edges) ONCE — reused across copies.
     const N = tier.hexes.length;
     const px = new Float32Array(N);
     const py = new Float32Array(N);
@@ -187,18 +192,23 @@ export function createHexLayer(app: Application): HexLayer {
     const dtEdges = performance.now() - t1;
 
     const t2 = performance.now();
-    for (const ox of offsets) {
-      const pc = new ParticleContainer({
-        dynamicProperties: { position: false, scale: false, rotation: false, color: false },
-      });
-      pc.label = `tier-${tier.name}-${ox}`;
-      pc.cullable = false;
-      pc.x = ox;
+    particles = new ParticleContainer({
+      dynamicProperties: { position: false, scale: false, rotation: false, color: false },
+    });
+    particles.label = `tier-${tier.name}`;
+    particles.cullable = false;
+
+    borders = new Graphics();
+    borders.label = `borders-${tier.name}`;
+    borders.cullable = false;
+
+    for (const [ox, oy] of offsets) {
+      // Particles: emit each hex 1-3 times with (x, y) shifted by (ox, oy).
       for (let i = 0; i < N; i++) {
-        pc.addParticle(new Particle({
+        particles.addParticle(new Particle({
           texture,
-          x: px[i]!,
-          y: py[i]!,
+          x: px[i]! + ox,
+          y: py[i]! + oy,
           anchorX: 0.5,
           anchorY: 0.5,
           scaleX: scale,
@@ -206,24 +216,18 @@ export function createHexLayer(app: Application): HexLayer {
           tint: tints[i]!,
         }));
       }
-      particleLayers.push(pc);
-      root.addChild(pc);
-
-      const g = new Graphics();
-      g.label = `borders-${tier.name}-${ox}`;
-      g.cullable = false;
-      g.x = ox;
+      // Borders: emit each segment 1-3 times with (x, y) shifted by (ox, oy).
       for (let i = 0; i < edges.length; i += 4) {
-        g.moveTo(edges[i]!, edges[i + 1]!).lineTo(edges[i + 2]!, edges[i + 3]!);
+        borders.moveTo(edges[i]! + ox, edges[i + 1]! + oy).lineTo(edges[i + 2]! + ox, edges[i + 3]! + oy);
       }
-      g.stroke({
-        color: BORDER_COLOR,
-        alpha: BORDER_ALPHA,
-        width: hexSizeWorldPx * BORDER_WIDTH_FACTOR,
-      });
-      borderLayers.push(g);
-      root.addChild(g);
     }
+    borders.stroke({
+      color: BORDER_COLOR,
+      alpha: BORDER_ALPHA,
+      width: hexSizeWorldPx * BORDER_WIDTH_FACTOR,
+    });
+    root.addChild(particles);
+    root.addChild(borders);
     const dtBuild = performance.now() - t2;
 
     console.info(
@@ -234,12 +238,12 @@ export function createHexLayer(app: Application): HexLayer {
   };
 
   const setBordersVisible = (visible: boolean): void => {
-    for (const b of borderLayers) b.visible = visible;
+    if (borders) borders.visible = visible;
   };
 
   const destroy = (): void => {
-    for (const l of particleLayers) l.destroy({ children: true });
-    for (const b of borderLayers) b.destroy();
+    if (particles) particles.destroy({ children: true });
+    if (borders) borders.destroy();
     texture.destroy();
     root.destroy({ children: true });
   };
