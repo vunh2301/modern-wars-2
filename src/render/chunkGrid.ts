@@ -19,7 +19,7 @@ import RBush from 'rbush';
 import type { Graphics, ParticleContainer } from 'pixi.js';
 import type { TierData, HexRecord } from '../data/tiers';
 import { axialToPx, SQRT_3 } from '../geo/hex';
-import { WRAP_HEX_COUNT_BASE, WRAP_BASE_TIER_KM } from '../geo/projection';
+import { normalizeHex } from '../geo/wrap';
 
 export const COLS = 8;
 export const ROWS = 4;
@@ -140,19 +140,10 @@ export function createChunkGrid(
   }
 
   // Pass 2: compute border edges with wrap-aware lookup, partition by midpoint.
-  // Wrap-aware lookup MIRRORS computeBorderEdges in old hexLayer.ts:113-119 —
-  // when q wraps over wrapHexCount columns, r adjusts ±halfWrap to keep the
-  // flat-top axial y-coord continuous (else Bering seam zigzags reappear).
-  const wrapHexCount = WRAP_HEX_COUNT_BASE * (WRAP_BASE_TIER_KM / tier.sizeKm);
-  const halfWrap = Math.floor(wrapHexCount / 2);
-  const qMin = -halfWrap;
-  const qMax = qMin + wrapHexCount - 1;
-
+  // Phase 6.8: wrap-aware q→r adjust delegated to normalizeHex (single source
+  // of truth — INVARIANT 2). Old inline lookup (hexLayer.ts:113-119) replaced.
   const wrapLookup = (q: number, r: number): number | undefined => {
-    let qq = q;
-    let rr = r;
-    if (qq > qMax) { qq -= wrapHexCount; rr += halfWrap; }
-    else if (qq < qMin) { qq += wrapHexCount; rr -= halfWrap; }
+    const [qq, rr] = normalizeHex(q, r, tier.sizeKm);
     return countryByKey.get((qq + KEY_OFFSET) * 65536 + (rr + KEY_OFFSET));
   };
 
