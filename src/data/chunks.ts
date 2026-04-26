@@ -21,7 +21,7 @@
 
 import { loadAndParse, parseChunkBinary as _parseChunkBinary } from '../workers/decoder';
 import type { DecoderManifestEntry } from '../workers/decoder';
-import { WorkerPool, QueueFullError } from '../workers/pool';
+import { WorkerPool, QueueFullError, WorkerCapabilityError } from '../workers/pool';
 import type { DecodeChunkResult } from '../workers/types';
 
 const HEADER_SIZE = 16;
@@ -164,14 +164,27 @@ export async function computeColorLutHash(lut: Uint32Array): Promise<string> {
  * Falls back to main-thread decoder.ts when:
  *   - ?worker=off URL param
  *   - typeof Worker === undefined (non-DOM / Vitest)
+ *   - WorkerCapabilityError (H2: any worker missing DecompressionStream)
  *
  * AbortSignal: meshHexLayer passes signal from abortController.
  * Pool cancel wired via signal.addEventListener('abort').
+ *
+ * @param entry      Chunk manifest entry (file path, hexCount, bbox, …)
+ * @param signal     Optional AbortSignal — abort triggers pool.cancel().
+ * @param tierName   Optional tier name (for cacheKey routing inside worker).
+ *                   Defaults to entry.id for backward compatibility; callers
+ *                   that know the active tier should pass it explicitly.
  */
 export async function loadChunk(
   entry: ChunkManifestEntry,
   signal?: AbortSignal,
+  tierName?: string,
 ): Promise<ChunkBuffers> {
+  // M2: respect already-aborted signals — don't even start the fetch / dispatch.
+  if (signal?.aborted) {
+    throw new DOMException('Aborted', 'AbortError');
+  }
+
   if (!useWorker) {
     // Main-thread fallback (Phase 7.9 path via decoder.ts).
     return loadAndParse(entry as DecoderManifestEntry, signal);
@@ -186,13 +199,23 @@ export async function loadChunk(
     signal.addEventListener('abort', () => p.cancel(id), { once: true });
   }
 
+  // M3: tier defaults to entry.id (backward-compat) when caller omits explicit
+  // tierName. TODO Phase 9: thread real tier through every call site so worker
+  // can use cacheKey = `${tier}:${chunkId}` without ambiguity.
+  const tier = tierName ?? entry.id;
+
   let result: DecodeChunkResult;
   try {
-    result = await p.dispatch({ type: 'decode-chunk', id, entry, tier: entry.id });
+    result = await p.dispatch({ type: 'decode-chunk', id, entry, tier });
   } catch (err) {
     if (err instanceof QueueFullError) {
       // Queue full — re-throw so meshHexLayer can add to retryNextCull.
       throw err;
+    }
+    if (err instanceof WorkerCapabilityError) {
+      // H2: worker missing DecompressionStream. Fall through to main-thread
+      // decode for the remainder of the session (pool stays degraded forever).
+      return loadAndParse(entry as DecoderManifestEntry, signal);
     }
     throw err;
   }

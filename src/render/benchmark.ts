@@ -44,6 +44,8 @@ export interface BenchmarkSnapshot {
     queueDepth: number;
     queueFullRejects: number;
     cancellations: number;
+    /** True after H2 fallback fires (worker missing DecompressionStream). */
+    degraded: boolean;
   };
 }
 
@@ -131,7 +133,8 @@ export function createBenchmark(app: Application, hexLayer: StatsProvider): Benc
       activeJobs: poolStats?.activeJobs ?? 0,
       queueDepth: poolStats?.queueDepth ?? 0,
       queueFullRejects: poolStats?.queueFullRejects ?? 0,
-      cancellations: 0, // tracked via pool in future iteration
+      cancellations: poolStats?.cancellations ?? 0,
+      degraded: poolStats?.degraded ?? false,
     };
 
     return {

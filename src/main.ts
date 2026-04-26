@@ -49,6 +49,8 @@ interface UnifiedHexLayer {
   prefetchTier?: (tierName: string, signal?: AbortSignal) => Promise<void>;
   /** Phase 8.3: wire cullNow for static-viewport QueueFullError retry rAF driver. */
   setCullNow?: (fn: () => void) => void;
+  /** Phase 8 H3: cold-cache worker stress (mesh engine only). */
+  forceWorkerStress?: (jobCount: number) => Promise<number[]>;
   destroy(): void;
 }
 
@@ -234,6 +236,11 @@ async function bootstrap(): Promise<void> {
   w.__mwHexLayer = hexLayer;
   w.__mwBenchmark = (): unknown => benchmark.snapshot();
   w.__mwBenchReset = (): void => benchmark.reset();
+  // Phase 8 H3 cold-cache stress hook for bench scenario 4. Awaits jobCount
+  // loadChunk dispatches against the worker pool and returns per-job latencies.
+  // Particles engine doesn't expose forceWorkerStress → returns [].
+  w.__mwForceWorkerStress = (jobCount: number): Promise<number[]> =>
+    hexLayer.forceWorkerStress?.(jobCount) ?? Promise.resolve([]);
 
   const updateHud = (): void => {
     w.__mwZoom = viewport.scale.x;

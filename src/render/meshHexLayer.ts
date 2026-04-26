@@ -86,6 +86,10 @@ export interface MeshHexLayer {
   prefetchTier(tierName: string, signal?: AbortSignal): Promise<void>;
   /** Phase 8.3: wire cullNow reference for static-viewport rAF retry driver. */
   setCullNow(fn: () => void): void;
+  /** Phase 8 H3 cold-cache stress: clear ChunkCache, dispatch N decode jobs
+   *  through the worker pool sequentially (or concurrently up to pool size),
+   *  return roundtrip latencies in ms. Used by bench scenario 4. */
+  forceWorkerStress(jobCount: number): Promise<number[]>;
   destroy(): void;
 }
 
@@ -284,7 +288,7 @@ export function createMeshHexLayer(app: Application): MeshHexLayer {
     // Capture promise ref so finally() only deletes its OWN entry (not a
     // newer promise registered after this one was aborted+restarted under
     // rapid LOD churn — Codex re-review LOW fix).
-    const promise: Promise<ChunkBuffers> = loadChunk(entry, sig)
+    const promise: Promise<ChunkBuffers> = loadChunk(entry, sig, tierAtRequest)
       .then((buffers) => {
         if (currentTierName === tierAtRequest) chunkCache.set(cacheKey, buffers);
         return buffers;
@@ -563,7 +567,7 @@ export function createMeshHexLayer(app: Application): MeshHexLayer {
       if (signal?.aborted) return;
 
       try {
-        const buffers = await loadChunk(entry, signal);
+        const buffers = await loadChunk(entry, signal, tierName);
         if (signal?.aborted) return;
         chunkCache.set(cacheKey, buffers);
         warmed++;
@@ -595,5 +599,51 @@ export function createMeshHexLayer(app: Application): MeshHexLayer {
     cullNowRef = fn;
   };
 
-  return { root, setTier, setBordersVisible, updateVisibility, getStats, prefetchTier, setCullNow, destroy };
+  /**
+   * Phase 8 H3: cold-cache decode stress. Clears ChunkCache, then issues
+   * `jobCount` loadChunk() calls back-to-back against the active tier's
+   * manifest entries. Returns array of per-job roundtrip latencies in ms.
+   * Bench scenario 4 uses this to compute true postMessage roundtrip p95.
+   *
+   * If no manifest is loaded yet or the active tier is empty, returns [].
+   */
+  const forceWorkerStress = async (jobCount: number): Promise<number[]> => {
+    if (!manifest) manifest = await loadChunksManifest();
+    if (!currentTierName) return [];
+    const tier = manifest.tiers[currentTierName];
+    if (!tier || tier.chunks.length === 0) return [];
+
+    chunkCache.clear();
+
+    const entries = tier.chunks;
+    const latencies: number[] = [];
+    const stressAbort = new AbortController();
+    for (let i = 0; i < jobCount; i++) {
+      const entry = entries[i % entries.length]!;
+      const t0 = performance.now();
+      try {
+        await loadChunk(entry, stressAbort.signal, currentTierName);
+      } catch (err) {
+        // Abort on capability fallback or hard error so caller sees a clear signal.
+        if (err instanceof DOMException && err.name === 'AbortError') break;
+        // Don't fail the whole loop on transient errors — record sentinel -1.
+        latencies.push(-1);
+        continue;
+      }
+      latencies.push(performance.now() - t0);
+    }
+    return latencies;
+  };
+
+  return {
+    root,
+    setTier,
+    setBordersVisible,
+    updateVisibility,
+    getStats,
+    prefetchTier,
+    setCullNow,
+    forceWorkerStress,
+    destroy,
+  };
 }
