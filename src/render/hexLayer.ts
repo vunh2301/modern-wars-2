@@ -35,7 +35,8 @@ import {
   WRAP_BASE_TIER_KM,
 } from '../geo/projection';
 
-// Coarse tiers (50km/25km) get wrap copies với Y shift để khớp flat-top axial.
+// Coarse tiers (50km/25km) get horizontal wrap copies (no Y shift —
+// canonical bake's lng wrap PiP places hexes at correct geographic lat).
 // 10km tier skip wrap để tránh OOM iPhone (1.25M × 3 = 3.75M particles).
 const WRAP_TIER_NAMES: ReadonlySet<string> = new Set(['50km', '25km']);
 

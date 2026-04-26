@@ -58,15 +58,19 @@ export function fitViewportToWorld(viewport: Viewport, app: Application): void {
 
 export function resizeViewport(app: Application, viewport: Viewport): void {
   const bounds = worldBoundsPx();
-  viewport.resize(app.screen.width, app.screen.height, bounds.width, bounds.height);
+  // worldWidth phải khớp WRAP_DISTANCE_PX (đã set trong createViewport),
+  // không phải bounds.width = 2π·R thô — nếu khác sẽ break clamp boundaries.
+  viewport.resize(app.screen.width, app.screen.height, WRAP_DISTANCE_PX, bounds.height);
 }
 
 /**
  * Bật clamp pan để giới hạn viewport.center.x ∈ [-W/2, +W/2]. Dùng cho fine
  * tier không có wrap copies (10km) — tránh user pan vào vùng empty.
- * direction: 'x' chỉ clamp X, để Y free.
+ * direction: 'x' chỉ clamp X, để Y free. Idempotent: gỡ clamp cũ trước
+ * khi cài mới để không stack nhiều plugin instances qua nhiều LOD switch.
  */
 export function enableXPanClamp(viewport: Viewport): void {
+  viewport.plugins.remove('clamp');
   viewport.clamp({
     left: -WRAP_DISTANCE_PX / 2,
     right: WRAP_DISTANCE_PX / 2,
