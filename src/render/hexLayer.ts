@@ -44,9 +44,11 @@ import {
   type ChunkGrid,
 } from './chunkGrid';
 
-// Coarse tiers (50km/25km) get horizontal wrap copies. 10km no wrap để tránh
-// OOM iPhone (1.25M × 3 = 3.75M particles).
-const WRAP_TIER_NAMES: ReadonlySet<string> = new Set(['50km', '25km']);
+// Wrap copies cho ALL tiers (50km/25km/10km). Phase 6 D-6 (extended): chunked
+// lazy build (D-4) khiến 10km wrap an toàn — peak ~24 chunk-instances ×
+// ~39K hexes ≈ 940K particles ≪ baseline 1.25M monolithic. Justin 2026-04-26
+// "zoom 10km cuộn qua trái và phải không được bị đứng ngay hai cạnh map".
+const WRAP_TIER_NAMES: ReadonlySet<string> = new Set(['50km', '25km', '10km']);
 
 export interface ViewportBbox {
   minX: number;
@@ -119,6 +121,41 @@ export function createHexLayer(app: Application): HexLayer {
   // visible-set tracking for diff. Entries are stable references from rbush.
   let visibleSet: Set<ChunkEntry> = new Set();
 
+  // Phase 6 Iter 1: LRU eviction. Caps built (chunk, offset) instances so
+  // pan-around-world doesn't accumulate full 96-instance heap (785 MB observed
+  // → ~150 MB target). Build order = FIFO age. Evict oldest non-visible.
+  // 24 = arch § 14 worst-case (12 visible × 2 wrap copies straddling seam).
+  const MAX_BUILT_INSTANCES = 24;
+  const builtOrder: Array<{ chunk: ChunkData; offsetX: number }> = [];
+
+  const isCurrentlyVisible = (chunk: ChunkData, offsetX: number): boolean => {
+    for (const e of visibleSet) {
+      if (e.chunk === chunk && e.offsetX === offsetX) return true;
+    }
+    return false;
+  };
+
+  const evictIfNeeded = (): void => {
+    let safety = 64;
+    while (builtOrder.length > MAX_BUILT_INSTANCES && safety-- > 0) {
+      let evictIdx = -1;
+      for (let i = 0; i < builtOrder.length; i++) {
+        const cand = builtOrder[i]!;
+        if (!isCurrentlyVisible(cand.chunk, cand.offsetX)) { evictIdx = i; break; }
+      }
+      if (evictIdx < 0) break; // all built are visible — accept transient overcap
+      const evicted = builtOrder.splice(evictIdx, 1)[0]!;
+      const pc = evicted.chunk.particlesByOffset.get(evicted.offsetX);
+      pc?.destroy({ children: true });
+      evicted.chunk.particlesByOffset.delete(evicted.offsetX);
+      const g = evicted.chunk.bordersByOffset.get(evicted.offsetX);
+      g?.destroy();
+      evicted.chunk.bordersByOffset.delete(evicted.offsetX);
+      evicted.chunk.builtAtByOffset.delete(evicted.offsetX);
+      stats.builtChunks--;
+    }
+  };
+
   // Stats (mutable; getStats returns snapshot).
   const stats: HexLayerStats = {
     totalChunks: 0,
@@ -184,6 +221,7 @@ export function createHexLayer(app: Application): HexLayer {
     chunk.particlesByOffset.set(offsetX, pc);
     chunk.bordersByOffset.set(offsetX, g);
     chunk.builtAtByOffset.set(offsetX, performance.now());
+    builtOrder.push({ chunk, offsetX });
     root.addChild(pc);
     root.addChild(g);
 
@@ -192,6 +230,7 @@ export function createHexLayer(app: Application): HexLayer {
     stats.builtChunks++;
     performance.mark('chunk-build-end');
     performance.measure('chunk-build', 'chunk-build-start', 'chunk-build-end');
+    evictIfNeeded();
     if (hexes.length > 50000) {
       console.warn(
         `[hex-layer] chunk ${chunk.bbox.id} built ${hexes.length} hexes in ${dt.toFixed(1)}ms (>50K threshold)`,
@@ -206,6 +245,7 @@ export function createHexLayer(app: Application): HexLayer {
     chunkGrid?.destroy();
     chunkGrid = null;
     visibleSet = new Set();
+    builtOrder.length = 0;
     stats.builtChunks = 0;
     stats.visibleChunks = 0;
 

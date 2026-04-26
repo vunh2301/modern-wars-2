@@ -26,6 +26,8 @@ export interface BenchmarkSnapshot {
 export interface Benchmark {
   recordTierSwitch(from: string, to: string, durationMs: number): void;
   snapshot(): BenchmarkSnapshot;
+  /** Clears FPS / chunk-build / visible-chunks ring buffers (keeps tierSwitchMs). */
+  reset(): void;
 }
 
 const FPS_BUFFER_MAX = 1800; // 30s @ 60fps
@@ -116,5 +118,13 @@ export function createBenchmark(app: Application, hexLayer: HexLayer): Benchmark
     };
   };
 
-  return { recordTierSwitch, snapshot };
+  const reset = (): void => {
+    // Phase 6 Iter 1 fix: KEEP chunkBuildBuf so cumulative chunk-build dist
+    // survives reset() between scenarios. fpsBuf + visibleBuf cleared so each
+    // scenario's percentiles are scenario-local.
+    fpsBuf.length = 0;
+    visibleBuf.length = 0;
+  };
+
+  return { recordTierSwitch, snapshot, reset };
 }

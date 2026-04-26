@@ -1,0 +1,147 @@
+{
+  "meta": {
+    "timestamp": "2026-04-26T06:12:57.158Z",
+    "url": "http://localhost:4173/",
+    "viewport": "430×932 @ DPR2 (iPhone 13 Pro Max emulated)",
+    "note": "Headless Chromium, NOT real iPhone. GPU-bound metrics likely optimistic vs real A15."
+  },
+  "scenarios": [
+    {
+      "name": "pan_storm_10km_30s",
+      "durationMs": 30000,
+      "fpsSamples": 279,
+      "fps_p50": 144.9,
+      "fps_p95": 140.8,
+      "fps_p99": 140.8,
+      "fps_min": 137,
+      "visibleChunks_min": 6,
+      "visibleChunks_max": 12,
+      "visibleChunks_avg": 7.3,
+      "memoryMb_max": 396,
+      "memoryMb_avg": 389.3
+    },
+    {
+      "name": "pinch_zoom_60s",
+      "durationMs": 60000,
+      "fpsSamples": 467,
+      "fps_p50": 142.9,
+      "fps_p95": 72.5,
+      "fps_p99": 20.6,
+      "fps_min": 9.6,
+      "visibleChunks_min": 6,
+      "visibleChunks_max": 12,
+      "visibleChunks_avg": 9,
+      "memoryMb_max": 544.2,
+      "memoryMb_avg": 405
+    },
+    {
+      "name": "pan_world_10km_60s",
+      "durationMs": 60000,
+      "fpsSamples": 533,
+      "fps_p50": 144.9,
+      "fps_p95": 135.1,
+      "fps_p99": 28.8,
+      "fps_min": 28.7,
+      "visibleChunks_min": 6,
+      "visibleChunks_max": 12,
+      "visibleChunks_avg": 8,
+      "memoryMb_max": 1856.3,
+      "memoryMb_avg": 1045.6
+    },
+    {
+      "name": "antimeridian_pan_10km_30s",
+      "durationMs": 30000,
+      "fpsSamples": 274,
+      "fps_p50": 142.9,
+      "fps_p95": 140.8,
+      "fps_p99": 131.6,
+      "fps_min": 36.1,
+      "visibleChunks_min": 9,
+      "visibleChunks_max": 12,
+      "visibleChunks_avg": 9.3,
+      "memoryMb_max": 1793.9,
+      "memoryMb_avg": 1249.1
+    }
+  ],
+  "cumulative": {
+    "fps_p50": 144.9,
+    "fps_p95": 140.8,
+    "fps_p99": 133.3,
+    "fps_min": 7.6,
+    "tierSwitchMs": {
+      "50km->10km": 752.5,
+      "10km->50km": 33.8,
+      "50km->25km": 73,
+      "25km->10km": 657,
+      "10km->25km": 108.1,
+      "25km->50km": 14.6
+    },
+    "chunkBuildMs": {
+      "p50": 9.1,
+      "p95": 64.8,
+      "max": 94.8,
+      "count": 500
+    },
+    "visibleChunks": {
+      "min": 9,
+      "max": 12,
+      "avg": 9.3
+    },
+    "memoryMb": 969.5,
+    "samples": {
+      "fps": 1800,
+      "chunkBuild": 500
+    }
+  },
+  "gates": [
+    {
+      "name": "tier_switch_50to25_under_50ms",
+      "target": "< 50 ms",
+      "actual": "73 ms",
+      "pass": false
+    },
+    {
+      "name": "tier_switch_25to10_under_80ms",
+      "target": "< 80 ms",
+      "actual": "657 ms",
+      "pass": false
+    },
+    {
+      "name": "pan_storm_10km_fps_p95_ge_58",
+      "target": "≥ 58 fps",
+      "actual": "140.8 fps",
+      "pass": true
+    },
+    {
+      "name": "pinch_zoom_fps_p95_ge_55",
+      "target": "≥ 55 fps",
+      "actual": "72.5 fps",
+      "pass": true
+    },
+    {
+      "name": "memory_peak_under_250mb",
+      "target": "< 250 MB",
+      "actual": "1856.3 MB (cum=969.5)",
+      "pass": false
+    },
+    {
+      "name": "visible_chunks_max_le_12_at_10km",
+      "target": "≤ 12",
+      "actual": "12",
+      "pass": true
+    },
+    {
+      "name": "chunk_build_p95_under_8ms",
+      "target": "< 8 ms",
+      "actual": "64.8 ms (max 94.8 ms)",
+      "pass": false
+    },
+    {
+      "name": "antimeridian_pan_10km_fps_p95_ge_58",
+      "target": "≥ 58 fps",
+      "actual": "140.8 fps",
+      "pass": true
+    }
+  ],
+  "passAll": false
+}

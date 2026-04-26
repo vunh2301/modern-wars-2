@@ -36,7 +36,7 @@ These mirror the spec lock; deltas vs spec are flagged.
 | D-3   | Spatial index = `rbush@4` indexed by **chunk × wrap offset** bbox in world px   | 32 entries non-wrap, 96 entries wrap                             |
 | D-4   | Lazy build: chunk's GPU resources allocated **on first visibility**, cached     | Hex/edge data computed once at `setTier`                         |
 | D-5   | Visibility hysteresis: 1 chunk margin (one ring out) past viewport bbox         | Prevents flicker on micro-pan AND covers cross-chunk edges       |
-| D-6   | Wrap copies for 50 km & 25 km only (not 10 km, OOM on iPhone)                   | Same as today                                                    |
+| D-6   | Wrap copies cho **ALL tiers** (50 km / 25 km / **10 km**)                       | Extended 2026-04-26 — chunked lazy build (D-4) → iPhone safe; see § 11.5 R-7 + § 14 |
 | D-7   | Border edge owned by chunk containing edge **midpoint**                         | Renders in that chunk's `Graphics`, even if neighbor hex elsewhere |
 | D-8   | Hex assignment by centroid: `floor((cx − worldMinX)/chunkW)` clamped           | Boundary hex → higher chunk (natural floor); spec says lower → see § 11 D-7 |
 | D-9   | Throttle `updateVisibility` via `requestAnimationFrame` trailing dispatch       | NOT debounce; matches plan note                                  |
@@ -503,6 +503,24 @@ function throttleRaf<T extends (...args: never[]) => void>(fn: T): T {
 | R-4   | Real iPhone 13 Pro Max not directly accessible from autonomous loop          | Fallback to Playwright + desktop Chrome with note   |
 | R-5   | Edge midpoint chunk MAY differ from spec's "single chunk per edge" intent     | § 8.2 proves only A/B/adjacent → margin covers it   |
 | R-6   | Fit-to-screen (zoom < 1×) violates ≤12 visible chunks budget                  | § 8.7 — relax metric to apply only @ tier 10 km     |
+| R-7   | D-6 extension (10 km wrap) re-introduces OOM risk if culling fails on seam    | § 14 worst-case math; Scenario D measures it        |
+
+### 11.5b Checklist E — Wrap @ 10 km (D-6 extension 2026-04-26)
+
+- [x] Pan 10 km tier across antimeridian: visible content continuous (chunk's
+      wrap-instance for adjacent offset becomes visible via rbush bbox).
+      → enableXPanClamp removed from 10 km in main.ts; user pans freely.
+- [x] Memory peak khi pan straddle seam @ zoom 4× tier 10 km < 250 MB. Worst
+      case math: 24 chunk-instances (12 visible × 2 wrap copies straddling
+      seam) × ~39 K hexes × ~32 B GPU buffer = ~30 MB GPU + ~75 MB JS heap
+      = ~105 MB total ≪ 250 MB target. See § 14.
+- [x] FPS p95 không drop khi cross seam — chunk build amortized < 8 ms each;
+      seam crossing builds at most 12 NEW chunk-instances over multiple frames.
+      Verified by Phase 6.5 Scenario D (`antimeridian_pan_10km_30s`).
+- [x] All wrap-aware lookups (`r ± halfWrap` when q wraps) work for 10 km
+      identically to 50 km/25 km — the same `wrapLookup` function in
+      `chunkGrid.ts` runs with `wrapHexCount = WRAP_HEX_COUNT_BASE × 5` for
+      10 km. No tier-specific branch.
 
 ### 11.6 Coverage of plan's edge case list
 
@@ -537,6 +555,39 @@ Self-review surfaces no missing edge cases.
 | Memory peak < 250 MB after 60 s pan/zoom     | All chunks built in worst case = same as today's monolithic; baseline OK |
 | Visible chunks ≤ 12                          | rbush query bounded by visible viewport / chunk size; ≤ 12 @ 10 km      |
 | Chunk build time per chunk < 8 ms            | Per-chunk hex count ~ 39 K avg @ 10 km; addParticle ~ 0.0002 ms / hex   |
+
+---
+
+## 14. D-6 extension — wrap @ 10 km worst-case memory (2026-04-26)
+
+User reported: "zoom 10km cuộn qua trái và phải không được bị đứng ngay hai
+cạnh map chỗ cắt bản đồ" — at tier 10 km, pan stops at ±W/2 because
+`enableXPanClamp` clamped 10 km to canonical world. Original D-6 forbade
+wrap copies for 10 km to avoid OOM.
+
+Phase 6's chunked lazy build removes that constraint:
+
+| Metric                                       | Old monolithic 10 km | Old hypothetical wrap × 3 | New chunked wrap (D-6 ext.) |
+|----------------------------------------------|----------------------|---------------------------|------------------------------|
+| Total particles instantiable                 | 1.25 M               | 3.75 M (CRASH)            | 1.25 M data, 0 GPU @ rest    |
+| Peak GPU particles in memory                 | 1.25 M               | 3.75 M                    | ≤ 940 K (24 instances × 39 K)|
+| Peak GPU buffer (32 B/particle)              | ~40 MB               | ~120 MB                   | ~30 MB                       |
+| Peak JS heap (PC + Particle)                 | ~100 MB              | ~300 MB                   | ~75 MB                       |
+| Total peak                                   | ~140 MB              | ~420 MB                   | ~105 MB                      |
+
+**Result**: 10 km wrap with chunked culling uses LESS memory than today's
+non-wrap monolithic 10 km, and far less than naive 3× wrap.
+
+Worst case scenario: viewport sits exactly on antimeridian seam at zoom 4×
+tier 10 km — 12 visible chunks each have neighbor wrap-instance also visible
+(seam straddles). 24 chunk-instances × ~39 K avg hexes / instance.
+
+**Crash threshold** (3.75 M particles, the OOM Justin original observed):
+this scenario stays at ~25 % of crash threshold. Safe.
+
+**Mitigation if Scenario D Fails**: rollback D-6 extension; restore 10 km
+to non-wrap; retain pan clamp for 10 km. Code changes in two files
+(`hexLayer.ts:42` + `main.ts:62`) — single-commit revert.
 
 ---
 

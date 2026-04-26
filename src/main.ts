@@ -58,8 +58,9 @@ async function bootstrap(): Promise<void> {
   const lut = buildColorLut(countries.countries);
   const availableTiers = new Set(Object.keys(manifest.tiles));
 
-  // Coarse tier wraps; fine tier (10km) needs clamp để tránh empty edge.
-  const TIERS_WITH_WRAP: ReadonlySet<string> = new Set(['50km', '25km']);
+  // Phase 6 D-6 (extended): all tiers wrap (chunked lazy build → 10km safe).
+  // Justin: "zoom 10km cuộn qua trái và phải không được bị đứng" (2026-04-26).
+  const TIERS_WITH_WRAP: ReadonlySet<string> = new Set(['50km', '25km', '10km']);
   const applyPanClampForTier = (tierName: string): void => {
     if (TIERS_WITH_WRAP.has(tierName)) disableXPanClamp(viewport);
     else enableXPanClamp(viewport);
@@ -137,6 +138,7 @@ async function bootstrap(): Promise<void> {
   w.__mwCullNow = cullNow;
   w.__mwHexLayer = hexLayer;
   w.__mwBenchmark = (): unknown => benchmark.snapshot();
+  w.__mwBenchReset = (): void => benchmark.reset();
 
   const updateHud = (): void => {
     w.__mwZoom = viewport.scale.x;
