@@ -64,28 +64,39 @@ export function resizeViewport(app: Application, viewport: Viewport): void {
 }
 
 /**
- * Bật clamp pan để giới hạn viewport visible ⊆ [-W/2, +W/2] world x.
- * Dùng cho fine tier (10km) không có wrap copies — tránh user pan thấy
- * vùng empty.
+ * Phase 6.7: Infinite horizontal wrap. Snap viewport.center.x vào canonical
+ * range [-W/2, +W/2] khi user pan vượt biên — invisible (visual identical
+ * vì hex grid wrap-instance copies fill seamlessly).
  *
- * QUAN TRỌNG: KHÔNG pass `direction:'x'` — pixi-viewport (line 648 source)
- * sẽ overwrite left/right thành `true` (= dùng default 0/worldWidth) khi
- * direction được set, IGNORE giá trị explicit em truyền. Pass `top:null,
- * bottom:null` để skip Y clamp.
+ * Replaces enable/disableXPanClamp (Phase < 6.7 logic). Tất cả tier dùng
+ * single helper, không còn pan clamp cứng. Justin 2026-04-26.
  *
- * Idempotent: gỡ clamp cũ trước khi cài mới (tránh stack qua nhiều LOD switch).
+ * Y vẫn clamp (Mercator chỉ wrap longitude, không wrap latitude). Reuse
+ * pixi-viewport's intrinsic Y bounds via worldHeight in createViewport.
  */
-export function enableXPanClamp(viewport: Viewport): void {
-  viewport.plugins.remove('clamp');
-  viewport.clamp({
-    left: -WRAP_DISTANCE_PX / 2,
-    right: WRAP_DISTANCE_PX / 2,
-    top: null,
-    bottom: null,
-  });
-}
+export function enableInfiniteWrap(viewport: Viewport): void {
+  const W = WRAP_DISTANCE_PX;
+  const HALF_W = W / 2;
+  let snapping = false;
 
-/** Tắt clamp pan — dùng cho coarse tier có wrap copies (50km/25km). */
-export function disableXPanClamp(viewport: Viewport): void {
-  viewport.plugins.remove('clamp');
+  const trySnap = (allowEdgeMargin: boolean): void => {
+    if (snapping) return;
+    const cx = viewport.center.x;
+    const limit = allowEdgeMargin ? HALF_W * 1.01 : HALF_W;
+    if (cx > limit) {
+      snapping = true;
+      viewport.moveCenter(cx - W, viewport.center.y);
+      snapping = false;
+    } else if (cx < -limit) {
+      snapping = true;
+      viewport.moveCenter(cx + W, viewport.center.y);
+      snapping = false;
+    }
+  };
+
+  // 'moved' fires continuously (drag, decelerate). Use 1.01× edge margin
+  // to avoid jitter at exact ±W/2.
+  viewport.on('moved', () => trySnap(true));
+  // 'moved-end' fires on momentum stop. Snap precisely.
+  viewport.on('moved-end', () => trySnap(false));
 }
