@@ -1,384 +1,407 @@
-# Phase 8: Web Worker Chunk Decode (CONDITIONAL)
+# Phase 8: Worker Pool Foundation + Decode Worker
 
-> **STATUS: BLOCKED — pending iOS Safari real-device memory verification.**
+> Build worker infrastructure foundation cho cả compute pipeline future.
+> Decode worker là first user — pathfinding/AI workers Phase 9+ dùng cùng pool.
 >
-> Phase 7 closed 4/5 hard gates. Remaining `memory_peak < 250 MB` failure
-> is GC-noise-dominated artifact in Chromium desktop measurements.
-> Phase 8 should ONLY execute if iOS Safari real-device measurements
-> confirm memory_peak still > 250 MB after Phase 7.
->
-> **Repo**: vunh2301/modern-wars-2
-> **Branch**: `phase-8-worker-decode` (off `main` AFTER Phase 7 merge)
-> **Owner agent**: Claude Code Sonnet 4.6 (writer) + Claude Opus 4.7 (reviewer)
-> **Estimated effort**: 8-12h with self-correction loop
-> **Activation gate**: Justin posts iOS bench result showing peak > 250 MB
+> Repo: vunh2301/modern-wars-2
+> Branch: phase-8-worker-pool (off main, AFTER current state merge)
+> Owner: Claude Code Sonnet 4.6 + Claude Opus 4.7 reviewer
+> Estimated effort: 14-18h
 
 ---
 
-## Context — what Phase 7 left
+## Context — why broad scope
 
-Phase 7 delivered (committed on `phase-7-prebaked-mesh`):
+Phase 7 + 7.9 đã pass tất cả gates với numbers excellent:
+- FPS p95 140.8
+- tier-switch 25→10: 0.1ms
+- memory_settled 275MB (<300)
+- memory_peak 473MB (<700 info-only)
+- chunk-build p95 1.9ms
 
-✅ Pre-baked Mesh approach replaces `addParticle` runtime loop
-✅ C2 instanced rendering kept (iter 2 win)
-✅ tier-switch 25→10km < 50 ms (was 714 ms)
-✅ chunk-build p95 < 5 ms (was 66 ms)
-✅ FPS p95 ≥ 90 fps (no regression from Phase 6's 130 fps)
-✅ Memory **cumulative settled** 205-230 MB (was 1873 MB)
+Memory peak gate đã relax từ <250 → <700 (info-only). Phase 8 KHÔNG còn
+mục đích đóng gate — gate đã đóng. Phase 8 mục đích THẬT là:
 
-⚠ Memory **pre-GC peak** 393-519 MB on Chromium desktop, ±32% variance.
+**Build worker pool infrastructure cho gameplay future.**
 
-Phase 7 retro § 7 hypothesis: **iOS Safari aggressive GC likely shows
-peak in cumulative settled range (205-230 MB)** — i.e., iOS may not need
-Phase 8 at all. Verification required before activation.
+Justin đã confirm gameplay scope: **RTS world war, AI vs AI vs Player,
+200 sides chiến đấu cùng lúc**.
 
----
+Compute load estimate:
+- 200 sides × 4 ticks/sec = 800 AI decisions/sec
+- ~400 pathfinds/sec worst case
+- Pathfinding 1.25M hex grid: 5-10ms/call on main thread
+- → 2800ms compute/sec needed → IMPOSSIBLE on main thread
 
-## Activation criteria
+Worker pool là **architectural requirement**, không phải optimization.
 
-Phase 8 executes ONLY if **all 3** confirmed by Justin:
-
-1. iPhone 16 Pro Max real-device test run with Safari Web Inspector
-2. 60s pan storm @ 10km tier
-3. Peak `usedJSHeapSize` measured > 250 MB across 3 reruns
-
-If iOS peak < 250 MB → Phase 8 cancelled, mark this prompt DEPRECATED,
-move to Phase 9 (gameplay) instead.
-
----
-
-## Mission (if activated)
-
-Move chunk decode pipeline off main thread to eliminate pre-GC peak
-spikes from main-thread heap.
-
-```
-BEFORE (Phase 7):
-  main thread:
-    fetch → DecompressionStream → ArrayBuffer → DataView parse → Geometry → GPU upload
-    ↑ All allocations on main thread heap, GC pressure spikes pre-GC
-       sample
-AFTER (Phase 8):
-  worker thread:
-    fetch → DecompressionStream → ArrayBuffer → DataView parse
-    → postMessage(transferable: [vertexBuf, indexBuf, tintBuf, edgeBuf])
-  main thread:
-    receive transferred ArrayBuffers (zero-copy ownership transfer)
-    → Geometry from buffers → GPU upload
-    ↑ Only Geometry allocation on main thread, far less GC pressure
-```
-
-**Key insight**: ArrayBuffer transfer (not copy) via `postMessage` second
-argument moves ownership without serialization. Worker decodes 1.25M
-hex tier without main thread seeing any of the intermediate allocations.
-
-### Performance targets (hard gates)
-
-| Metric | Phase 7 actual | Phase 8 target | Method |
-|---|---:|---:|---|
-| memory peak (60s pan @ 10km, iOS Safari) | (TBD from Step 2) | **< 250 MB** | Safari Web Inspector |
-| memory peak variance across 3 reruns | ±32% | **< ±10%** | same |
-| tier-switch 25→10km | < 50 ms | **< 60 ms** | acceptable degradation |
-| chunk-build p95 | < 5 ms | **< 10 ms** | acceptable degradation |
-| FPS p95 (pan + zoom + wrap) | ≥ 90 fps | **≥ 85 fps** | no major regression |
-| Worker init time | N/A | **< 100 ms** | one-time cost |
-| Worker bundle size | N/A | **< 50 KB gzipped** | bundle guard |
-
-Trade-offs accepted:
-- Slight latency increase (postMessage overhead ~1-3ms per chunk)
-- Worker bundle adds ~50 KB to initial load
-- Worker spinup cost ~100ms one-time
+Decode worker là first concrete user. Pathfinding worker (Phase 9) +
+AI worker (Phase 9) + Combat resolver worker (Phase 10+) sẽ dùng
+cùng pool architecture.
 
 ---
 
-## Architectural decisions (LOCKED)
+## Mission
 
-### A. Worker entry point
+Build production-grade worker pool foundation reusable cho 5+ worker
+types future. Migrate chunk decode (current main-thread implementation
+in src/data/chunks.ts) sang first worker user.
 
-New file `src/workers/chunkDecoder.worker.ts`:
+### Hard goals
+
+1. Worker pool infrastructure with typed message protocol
+2. Decode worker fully migrate (replace current main-thread decode path)
+3. Foundation interfaces ready cho pathfinding/AI workers (Phase 9 implements)
+4. Memory: settled <= current 275MB ±10%, peak < 500MB
+5. Performance: FPS p95 ≥ 140 (no regression vs current)
+6. Latency: postMessage roundtrip < 5ms p95
+7. Backward compat: ?worker=off URL param fallback to main-thread decode
+
+### Soft goals
+
+- Worker bundle < 50KB gzipped
+- Cold boot worker pool init < 200ms (one-time cost)
+- Zero memory leak after 60s pan storm + 100 chunk evictions
+- Cancellation semantics work correctly (viewport moves out of range mid-fetch)
+
+### Non-goals (Phase 9+ scope)
+
+- Pathfinding implementation (only interface stubs)
+- AI logic implementation (only interface stubs)
+- Combat resolution (out of scope entirely)
+- Procedural content generation
+
+---
+
+## Architecture decisions (LOCKED)
+
+### A. Worker pool size
+
+4 workers fixed pool. Reasoning:
+- iPhone 16 Pro Max A18: 6 performance cores + 4 efficiency cores
+- Browser limits ~10 concurrent workers/origin
+- 4 workers = headroom for: decode + pathfinding + AI + combat
+- Round-robin job assignment, no preemption
+
+Pool size configurable via URL `?workers=N` for benchmark, default 4.
+
+### B. Job types via discriminated union
+
+src/workers/types.ts:
 
 ```ts
-import type { ChunkRequest, ChunkResponse } from './chunkDecoder.types';
+export type WorkerJob =
+  | { type: 'decode-chunk'; id: string; tier: string; col: number; row: number }
+  | { type: 'pathfind'; id: string; ... }      // Phase 9 stub
+  | { type: 'ai-tick'; id: string; ... }       // Phase 9 stub
+  | { type: 'combat'; id: string; ... };       // Phase 10+ stub
 
-self.onmessage = async (e: MessageEvent<ChunkRequest>) => {
-  const { id, url } = e.data;
-  try {
-    const res = await fetch(url, { credentials: 'omit' });
-    const stream = res.body!.pipeThrough(new DecompressionStream('gzip'));
-    const decompressed = await new Response(stream).arrayBuffer();
-
-    // Parse header + extract typed array views
-    const view = new DataView(decompressed);
-    // ... validate magic, version, parse offsets
-    const vertexBuf = decompressed.slice(...);  // copy into own buffer for transfer
-    const indexBuf = decompressed.slice(...);
-    const tintBuf = decompressed.slice(...);
-    const edgeBuf = decompressed.slice(...);
-
-    const response: ChunkResponse = {
-      id,
-      ok: true,
-      vertices: vertexBuf,
-      indices: indexBuf,
-      tints: tintBuf,
-      borderEdges: edgeBuf,
-      bbox: { ... },
-      hexCount: ...,
-    };
-
-    // Transfer ownership (zero-copy)
-    self.postMessage(response, [vertexBuf, indexBuf, tintBuf, edgeBuf]);
-  } catch (err) {
-    self.postMessage({ id, ok: false, error: String(err) });
-  }
-};
+export type WorkerResult =
+  | { type: 'decode-chunk'; id: string; ok: true; vertices: ArrayBuffer; ... }
+  | { type: 'decode-chunk'; id: string; ok: false; error: string }
+  | { type: 'pathfind'; id: string; ok: true; path: number[] }
+  | ...;
 ```
 
-Vite supports worker imports via `?worker` suffix:
-```ts
-import ChunkDecoderWorker from './workers/chunkDecoder.worker.ts?worker';
-const worker = new ChunkDecoderWorker();
-```
+Phase 8 implement decode-chunk only. Phase 9/10 add other types.
 
-### B. Worker pool
-
-Single worker insufficient — concurrent chunk decodes block each other.
-Spawn pool of N workers, round-robin job assignment:
+### C. Job dispatcher pattern
 
 ```ts
 class WorkerPool {
-  private workers: Worker[];
-  private jobQueue: Map<string, { resolve: (b: ChunkBuffers) => void; reject: (e: Error) => void }>;
-  private nextWorker = 0;
-
-  constructor(size: number) {
-    this.workers = Array.from({ length: size }, () => new ChunkDecoderWorker());
-    this.workers.forEach(w => {
-      w.onmessage = (e) => this.handleResponse(e.data);
-    });
-  }
-
-  decode(url: string): Promise<ChunkBuffers> {
-    return new Promise((resolve, reject) => {
-      const id = `${url}-${Date.now()}`;
-      this.jobQueue.set(id, { resolve, reject });
-      const worker = this.workers[this.nextWorker];
-      this.nextWorker = (this.nextWorker + 1) % this.workers.length;
-      worker.postMessage({ id, url });
-    });
-  }
-
-  destroy() { ... }
+  dispatch<T extends WorkerJob>(job: T): Promise<WorkerResult>;
+  cancel(jobId: string): void;
+  destroy(): void;
 }
 ```
 
-**Pool size**: 2 workers. Enough for 12 visible chunks max (~6 concurrent
-loads when entering new viewport region). More workers = more memory
-overhead, no benefit since most chunks already cached.
+Round-robin worker assignment. Cancellation via main-side ID tracking
+(workers complete but result discarded).
 
-### C. Backpressure & abort
+### D. Transferable buffer ownership
 
-If viewport moves out of range while chunk decoding:
-- Mark job as `cancelled` in jobQueue
-- Worker still completes (can't cancel mid-fetch reliably) but main
-  thread discards result
-- LRU cache discards if worker returns chunk no longer in cache window
+CRITICAL rule lock: ArrayBuffers in postMessage second arg are
+TRANSFERRED, not copied. Worker must use slice() to create owned
+buffers before transfer.
 
-```ts
-const abortController = new AbortController();
-worker.postMessage({ id, url, signal: abortController.signal });
-// Note: AbortSignal doesn't transfer to worker context — workaround:
-// main thread tracks cancelled IDs, ignores responses
-```
-
-### D. ChunkCache integration
-
-`src/data/chunks.ts` interface unchanged externally:
-```ts
-export async function loadChunk(tier: string, col: number, row: number): Promise<ChunkBuffers>;
-```
-
-Internal change: `loadChunkInner()` delegates to `WorkerPool.decode(url)`
-instead of inline fetch+decompress+parse.
-
-LRU cache logic unchanged.
-
-### E. Fallback for unsupported environments
-
-Web Workers + DecompressionStream both have wide support, but:
-- Old iOS (< 14): no DecompressionStream
-- Old Safari: no Worker module type
-
-Fallback: detect at module init, fall back to Phase 7 main-thread path
-if either missing. Log warning.
+Helper utility:
 
 ```ts
-const HAS_WORKER_DECODE_SUPPORT =
-  typeof Worker !== 'undefined' &&
-  typeof DecompressionStream !== 'undefined';
-
-export const loadChunk = HAS_WORKER_DECODE_SUPPORT
-  ? loadChunkViaWorker
-  : loadChunkMainThread;  // Phase 7 implementation kept as fallback
+function transferBuffers(payload: WorkerResult): ArrayBuffer[] {
+  // extract all ArrayBuffer fields automatically
+}
 ```
 
-### F. Transfer ownership rule
+Reviewer checklist enforce.
 
-**CRITICAL**: ArrayBuffers in `postMessage` second arg are TRANSFERRED,
-not copied. After transfer, sender's reference becomes detached (length
-0). Worker must use `slice()` or new allocations to create owned buffers
-before transferring.
+### E. Fallback strategy
 
-```ts
-// CORRECT — slice before transfer (creates own buffer)
-const vertexBuf = decompressed.slice(headerSize, headerSize + vertexSize);
-self.postMessage({ vertices: vertexBuf }, [vertexBuf]);
+Detection at module init:
+- Worker support: typeof Worker !== 'undefined'
+- DecompressionStream: typeof DecompressionStream !== 'undefined'
 
-// WRONG — would detach decompressed buffer mid-parse
-const vertexBuf = new Float32Array(decompressed, headerSize, vertexCount);
-self.postMessage({ vertices: vertexBuf.buffer }, [vertexBuf.buffer]);
-// ↑ buffer is now detached, subsequent parsing fails
+If either missing OR ?worker=off URL param:
+- Fallback to main-thread decode path (current Phase 7.9 implementation)
+- Log warning, no error
+
+### F. Module structure
+
+```
+src/workers/
+├── pool.ts                   # WorkerPool class (~200 lines)
+├── types.ts                  # discriminated union types (~80 lines)
+├── transferUtils.ts          # ArrayBuffer extraction helpers (~40 lines)
+├── decoder.worker.ts         # Decode worker entry (~150 lines)
+├── decoder.ts                # Main-thread decode helpers (parser logic)
+└── stubs.ts                  # Phase 9/10 worker stubs (interface only)
+
+src/data/chunks.ts modified to delegate to pool.
 ```
 
-Reviewer checklist must verify this.
+### G. KHÔNG xóa Phase 7.9 main-thread path
+
+Main-thread decode kept as fallback. Switchable via:
+- ?worker=on (default) → use pool
+- ?worker=off → main-thread (Phase 7.9 path)
+
+Insurance + A/B benchmark capability.
 
 ---
 
 ## Implementation phases
 
-### Phase 8.0: Architecture review (MANDATORY before code)
+### Phase 8.0: Architecture review (mandatory, ~2h)
 
-Read these files via repo before designing:
+Read files:
+- src/data/chunks.ts (current main-thread decode)
+- src/data/manifest.ts
+- src/render/meshHexLayer.ts (consumer that won't change)
+- docs/phase-7-retro.md (Phase 7 lessons)
+- docs/phase-7-architecture.md (current architecture)
+- docs/COORDINATE_SYSTEM.md (DO NOT violate)
 
-- `docs/phase-7-retro.md` (current memory peak diagnosis)
-- `src/data/chunks.ts` (Phase 7 main-thread loader to delegate from)
-- `src/render/meshHexLayer.ts` (consumer that won't change)
-- `vite.config.ts` (worker config check)
+Write docs/phase-8-architecture.md (400-600 lines):
 
-Then write `docs/phase-8-architecture.md` (300-500 lines) covering:
-
-1. Phase 7 main-thread pipeline diagram
-2. Phase 8 worker pipeline diagram
-3. Transfer ownership rule explanation with code examples
-4. Worker pool design + concurrency model
-5. Backpressure / cancellation semantics
-6. Fallback strategy for unsupported browsers
-7. Memory model: where allocations land (worker heap vs main heap)
-8. iOS Safari specifics: aggressive GC behavior, transferable support
-9. Risk: postMessage latency vs cumulative gain
-10. Rollback plan: keep `chunkDecoder.worker.ts` deletable, restore main-thread default
+1. Current Phase 7.9 main-thread decode pipeline diagram (ASCII)
+2. Phase 8 worker pool pipeline diagram (ASCII)
+3. Worker pool design:
+   - Pool size rationale
+   - Job dispatch flow
+   - Round-robin selection
+   - Cancellation semantics
+4. Discriminated union message protocol:
+   - All current job types (decode-chunk only)
+   - Stub interfaces for Phase 9 (pathfind, ai-tick)
+   - Stub interfaces for Phase 10+ (combat)
+5. Transferable buffer rules:
+   - Why slice() before transfer
+   - Helper function design
+   - Common mistakes catalog
+6. Backpressure & cancellation:
+   - Job queue management
+   - In-flight tracking
+   - LRU eviction interaction
+7. Fallback strategy:
+   - Detection logic
+   - URL param override
+   - Warning UX
+8. Memory model:
+   - Worker heap vs main heap
+   - GC implications
+   - Cumulative memory math
+9. Migration path:
+   - src/data/chunks.ts before/after
+   - Backward compat guarantee
+   - Test strategy
+10. Risks + mitigation table
+11. Phase 9 readiness check:
+    - Pathfinding worker stub interface
+    - AI worker stub interface
+    - Pool capacity check (4 workers enough for 4+ types?)
 
 Self-review checklist:
-- [ ] Transferable rule respected everywhere?
-- [ ] Worker errors propagate to main thread (no orphan rejects)?
-- [ ] Worker pool destroy releases all workers?
-- [ ] Cancellation doesn't leak job queue entries?
+- [ ] Transferable rule documented with examples?
+- [ ] Worker error propagation defined?
+- [ ] Pool destroy releases all workers?
+- [ ] Cancellation doesn't leak job queue?
 - [ ] Bundle size accounts for worker chunk?
-- [ ] Fallback path tested?
+- [ ] Stub interfaces minimal but enough for Phase 9?
 
-### Phase 8.1: Worker scaffold (~2h)
+Stop and ask Justin if uncertain about scope — don't guess.
 
-- Create `src/workers/chunkDecoder.worker.ts`
-- Create `src/workers/chunkDecoder.types.ts` (shared types)
-- Vite config verify worker plugin support
-- Standalone test: spawn worker, decode 1 chunk URL, verify output
+### Phase 8.1: Pool foundation (~3h)
 
-### Phase 8.2: Worker pool (~2h)
+- src/workers/types.ts — discriminated union types + stubs
+- src/workers/pool.ts — WorkerPool class
+  - Pool initialization (lazy spawn)
+  - Round-robin dispatch
+  - Job ID tracking
+  - Cancellation via ID set
+  - Destroy method
+- src/workers/transferUtils.ts — extractTransferables() helper
+- Unit test: spawn pool, dispatch 5 mock jobs, verify all complete + correct routing
 
-- `src/workers/workerPool.ts` with round-robin + jobQueue
-- Cancellation via main-side ID tracking
-- Tests: concurrent decode 5 chunks, all return correctly
+### Phase 8.2: Decode worker (~3h)
 
-### Phase 8.3: ChunkCache integration (~1.5h)
+- src/workers/decoder.worker.ts — worker entry
+  - Listen for 'decode-chunk' jobs
+  - fetch + DecompressionStream + parse logic (move from chunks.ts)
+  - slice() buffers before transfer
+  - postMessage with transfer list
+  - Error handling
+- src/workers/decoder.ts — extract pure parse helpers
+  (used by both worker AND main-thread fallback)
+- Vite config verify: worker imports work
 
-- Refactor `src/data/chunks.ts::loadChunkInner` → delegate to worker pool
-- Keep main-thread fallback as `loadChunkMainThread`
-- Detect support, pick at module init
-- A/B switch via `?decode=worker|main` for fallback testing
+### Phase 8.3: ChunkCache integration (~2h)
 
-### Phase 8.4: Memory profiling harness (~1h)
+src/data/chunks.ts refactor:
+- Detect worker support at module init
+- If supported AND ?worker !== 'off': delegate to WorkerPool.dispatch
+- Else: use main-thread decoder.ts directly
+- Public API (loadChunk) unchanged
+- Cancellation: when chunk evicted from LRU before load completes,
+  call pool.cancel(jobId)
 
-Extend HUD with both pre-GC and settled memory:
+### Phase 8.4: Worker stubs for Phase 9 (~1h)
+
+src/workers/stubs.ts:
+
+```ts
+// Phase 9 will implement these. Phase 8 only defines interfaces +
+// stub workers that throw "not implemented".
+
+export interface PathfindRequest {
+  type: 'pathfind';
+  id: string;
+  startQ: number; startR: number;
+  goalQ: number; goalR: number;
+  tierKm: number;
+  // ... future fields
+}
+
+export interface PathfindResult {
+  type: 'pathfind';
+  id: string;
+  ok: boolean;
+  path?: Array<[number, number]>;
+  error?: string;
+}
+
+// Stub worker that returns "not implemented" error.
+// Phase 9 will replace with real implementation.
 ```
-mem: 230MB used | 519MB peak (last 5s) | 215MB settled
+
+Why include stubs in Phase 8: lock interface contracts now, Phase 9
+implementer (could be Claude Code or Justin) doesn't need to design
+contracts under pressure.
+
+### Phase 8.5: Memory + performance instrumentation (~1h)
+
+Extend HUD:
+- Worker pool stats: "workers: 4 | active: 2 | queue: 0"
+- Per-worker job count: "[w0:128 w1:127 w2:128 w3:127]"
+- postMessage latency p95
+- Decode mode indicator: "decode: worker" or "decode: main"
+
+window.__mwBenchmark() returns extended metrics:
+
+```ts
+{
+  ...existing fields,
+  worker: {
+    poolSize: 4,
+    totalJobs: number,
+    avgLatencyMs: number,
+    p95LatencyMs: number,
+    activeJobs: number,
+    queueDepth: number,
+  }
+}
 ```
 
-Sample at:
-- Pre-GC: every 100ms (current)
-- Settled: every 2000ms (assume GC ran by then)
+### Phase 8.6: Benchmark + regression test (~2h)
 
-Bench script `scripts/bench-phase8-memory.mjs` runs 60s pan storm,
-records both numbers, outputs JSON.
+scripts/bench-phase8.ts runs:
+1. Pan storm 30s @ 10km — FPS p95, memory peak/settled
+2. Pinch zoom storm 60s — FPS p95
+3. Antimeridian wrap pan 60s — FPS p95
+4. Worker latency stress: dispatch 1000 decode jobs back-to-back
 
-### Phase 8.5: Real-device verification (~1h)
+Compare against Phase 7.9 baseline (saved bench-results/phase-7-final.json).
 
-REQUIRES Justin to:
-1. Run `pnpm dev`
-2. Connect iPhone to Mac via cable
-3. Enable Web Inspector (Safari → Develop → iPhone → page)
-4. Open Memory tab in Web Inspector
-5. Run pan storm scenario for 60s
-6. Record 3 measurements: peak, settled, post-GC
+REQUIRE: no metric regresses by > 5%. New metric (worker latency p95)
+must be < 5ms.
 
-Claude Code outputs script to automate scenario reproduction. Justin
-runs script + posts numbers back.
+### Phase 8.7: Self-correction loop (max 2 iterations)
 
-### Phase 8.6: Self-correction (autonomous, max 2 iterations)
+Same structure as Phase 6/7. Likely candidates if fail:
+- Iter 1: Adjust worker pool size (3 vs 4 vs 5)
+- Iter 2: Reduce worker bundle (lazy import worker code, smaller postMessage payload)
 
-Iteration cap reduced from 3 → 2 (Phase 8 lower priority, don't burn
-budget if marginal gains).
-
-Likely candidates if memory still high:
-- iter 1: Reduce LRU cap 24 → 16
-- iter 2: Stop, propose Phase 9 alternative (e.g., texture atlas hex)
+Stop after iter 2.
 
 ---
 
-## Constraints (must respect)
+## Constraints
 
-1. **NO breaking changes** to `src/geo/wrap.ts`, `docs/COORDINATE_SYSTEM.md`
-2. **NO new runtime dependencies** beyond what's in package.json
-3. **NO gameplay code** (Phase 6 NEGATIVE list still applies)
-4. **TypeScript strict mode**
-5. **A/B switch required**: `?decode=worker` (default) | `?decode=main` (fallback)
-6. **Worker bundle < 50 KB gzipped**
-7. **Phase 7 main-thread path stays functional** as fallback
-8. **NO premature optimization**: if iOS test shows memory OK in Phase 7,
-   STOP and don't ship Phase 8 — explicitly mark prompt DEPRECATED
+1. NO breaking changes to:
+   - src/geo/wrap.ts (coordinate contract)
+   - docs/COORDINATE_SYSTEM.md
+   - public API of src/data/chunks.ts (loadChunk signature unchanged)
+2. NO new runtime dependencies. Pixi v8 + native APIs only.
+3. NO gameplay code. Stubs only — no logic implementation.
+4. TypeScript strict mode.
+5. A/B switch required: ?worker=on (default) | ?worker=off (Phase 7.9 fallback).
+6. Phase 7.9 main-thread decode path stays fully functional.
+7. Worker bundle < 50KB gzipped.
+8. Stop and ask Justin if architectural decision needed beyond locked Section A-G.
 
 ---
 
 ## Reviewer checklists
 
-### Checklist A: Worker correctness
-- [ ] Worker properly destroyed on app unmount?
-- [ ] Worker errors caught and propagated to main thread?
-- [ ] No worker spawn race conditions?
+### A. Pool correctness
+- [ ] Pool destroy releases all workers (no orphan threads)?
+- [ ] Worker errors propagate to main thread?
+- [ ] No worker spawn race conditions on init?
 - [ ] postMessage payload validated on main thread?
+- [ ] Round-robin assignment works under concurrent load?
 
-### Checklist B: Transfer ownership
+### B. Transferable ownership
 - [ ] All ArrayBuffers in transfer list match payload references?
 - [ ] No detached buffer access after transfer?
-- [ ] `slice()` used before transfer to avoid detaching parent?
+- [ ] slice() used before transfer to avoid detaching parent?
 - [ ] Worker doesn't reuse transferred buffers?
+- [ ] extractTransferables() helper correct for all message types?
 
-### Checklist C: Memory & lifecycle
-- [ ] Cumulative settled memory < 250 MB on iOS?
-- [ ] Peak memory < 250 MB on iOS (or within ±10% variance)?
+### C. Memory & lifecycle
+- [ ] Settled memory <= current 275MB ±10%?
+- [ ] Peak memory < 500MB?
 - [ ] Worker pool destroy releases all worker threads?
 - [ ] Cancelled jobs don't leak in queue?
+- [ ] No memory growth across 100 chunk evictions?
 
-### Checklist D: Performance
-- [ ] postMessage roundtrip < 5 ms p95?
-- [ ] Tier switch within 60 ms (Phase 8 budget)?
-- [ ] Chunk build p95 within 10 ms?
-- [ ] FPS p95 ≥ 85 fps?
+### D. Performance
+- [ ] postMessage roundtrip p95 < 5ms?
+- [ ] FPS p95 ≥ 140 (no regression)?
+- [ ] tier-switch p95 < 5ms?
+- [ ] chunk-build p95 < 5ms?
 
-### Checklist E: Fallback
+### E. Fallback compat
 - [ ] Detection logic correct (Worker + DecompressionStream)?
-- [ ] Main-thread path still works via `?decode=main`?
+- [ ] ?worker=off forces main-thread path?
 - [ ] No crash on unsupported environment?
 - [ ] HUD displays current decode mode?
+- [ ] Phase 7.9 path 100% identical behavior when ?worker=off?
+
+### F. Phase 9 readiness
+- [ ] Pathfinding stub interface complete?
+- [ ] AI stub interface complete?
+- [ ] Pool can dispatch new job types without code change?
+- [ ] Discriminated union exhaustive check (TS compile error if new type added without handler)?
+
+If ANY checkbox fails → block commit, fix, retry.
 
 ---
 
@@ -386,18 +409,18 @@ Likely candidates if memory still high:
 
 | Phase | Budget |
 |---|---:|
-| 8.0 architecture review | 1.5h |
-| 8.1 worker scaffold | 2h |
-| 8.2 worker pool | 2h |
-| 8.3 cache integration | 1.5h |
-| 8.4 memory profiling | 1h |
-| 8.5 real-device verification (Justin runs) | 1h (mostly waiting) |
-| 8.6 iter 1 | 1.5h |
-| 8.6 iter 2 | 1.5h |
-| **Total max** | **12h** |
+| 8.0 architecture review + self-review | 2h |
+| 8.1 pool foundation | 3h |
+| 8.2 decode worker | 3h |
+| 8.3 ChunkCache integration | 2h |
+| 8.4 stubs for Phase 9 | 1h |
+| 8.5 instrumentation | 1h |
+| 8.6 benchmark | 2h |
+| 8.7 iter 1 | 1.5h |
+| 8.7 iter 2 | 1.5h |
+| Total max | 17h |
 
-Stop after iter 2 — don't push to iter 3 (architecture sound, marginal
-gains unlikely to justify more time).
+Stop after iter 2 — don't push iter 3.
 
 ---
 
@@ -410,52 +433,38 @@ docs/
 ├── phase-8-iter-2.md              # if needed
 └── phase-8-retro.md               # final retrospective
 
-src/workers/
-├── chunkDecoder.worker.ts        # NEW (~150 lines)
-├── chunkDecoder.types.ts         # NEW shared types (~30 lines)
-└── workerPool.ts                  # NEW (~120 lines)
+src/workers/                      # NEW directory
+├── pool.ts                       # ~200 lines
+├── types.ts                      # ~80 lines
+├── transferUtils.ts              # ~40 lines
+├── decoder.worker.ts             # ~150 lines
+├── decoder.ts                    # ~100 lines (extracted)
+└── stubs.ts                      # ~80 lines
 
 src/data/
-└── chunks.ts                     # MODIFIED — delegate to worker pool
+└── chunks.ts                     # MODIFIED, public API unchanged
 
 scripts/
-└── bench-phase8-memory.mjs       # NEW automated bench
+└── bench-phase8.ts               # NEW
 
 bench-results/
-└── phase-8-final.json            # iOS + Chromium dual numbers
+└── phase-8-final.json            # benchmark output
 ```
 
 ---
 
-## Activation flow
+## Begin
 
-```
-1. Justin merges Phase 7 to main
-2. Justin tests on iPhone 16 Pro Max real device:
-   - Connect to Mac, Safari Web Inspector
-   - Run pan storm 60s @ 10km tier
-   - Record peak + settled memory across 3 runs
-3. Decision:
-   IF iOS peak < 250 MB:
-     → Phase 8 CANCELLED
-     → Update this file: STATUS: DEPRECATED — iOS verified Phase 7 sufficient
-     → Move to Phase 9 (gameplay)
-   IF iOS peak > 250 MB:
-     → Phase 8 ACTIVATED
-     → Branch off main, execute 8.0-8.6
-4. Final decision per iteration:
-   IF Phase 8 closes gate → merge
-   IF Phase 8 fails after iter 2 → keep Phase 7 ship, document tradeoff
-```
+Start với Phase 8.0 architecture review. Do not write code until 8.0
+doc reviewed (self-reviewed if no human reviewer available).
 
----
+REQUIRE Phase 7.9 polish merged to main BEFORE starting Phase 8.
 
-## Begin (only if activated)
+When uncertain about scope or design — STOP AND ASK JUSTIN. Don't guess.
 
-Phase 7 must be merged to main first. Phase 8 starts on `phase-8-worker-decode`
-branch off main.
+If a metric fails after iter 2 — STOP AND REPORT. Don't infinite loop.
 
-If you're reading this and Justin hasn't posted iOS bench numbers yet —
-**WAIT**. Don't start. Phase 8 may be unnecessary.
+Phase 8 success = foundation ready for Phase 9 to plug in pathfinding
+and AI workers without infrastructure rework.
 
 Good luck.
