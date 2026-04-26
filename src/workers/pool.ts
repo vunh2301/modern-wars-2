@@ -62,7 +62,7 @@ export interface WorkerPoolOptions {
   size?: number; // default 4
   lazy?: boolean; // default true (spawn on first dispatch)
   scheduler?: SchedulingStrategy; // default = FifoRoundRobinScheduler
-  maxQueueDepth?: number; // default 2 × size
+  maxQueueDepth?: number; // default 16 × size — sized for 48 visible chunks × 3 wrap copies burst (Phase 8.7 iter 1 fix)
   /**
    * Factory that constructs a Worker. Default (production) instantiates
    * decoder.worker.ts via the inline `new Worker(new URL('./decoder.worker.ts',
@@ -543,10 +543,8 @@ export class WorkerPool {
     this.drainQueue(workerIndex);
   }
 
-  private drainQueue(workerIndex: number): void {
-    const slot = this.slots[workerIndex];
-    if (!slot || slot.busy) return;
-
+  private drainQueue(_workerIndex: number): void {
+    // Pick the next job via the scheduler (respects Phase 9 priority/affinity).
     const job = this.scheduler.pickNext(
       this.slots as ReadonlyArray<WorkerSlot>,
       this.queue,
@@ -556,11 +554,25 @@ export class WorkerPool {
     const entry = this.pendingJobs.get(job.id);
     if (!entry) {
       // Job was cancelled while queued — try next.
-      this.drainQueue(workerIndex);
+      this.drainQueue(_workerIndex);
       return;
     }
 
-    this.sendToWorker(workerIndex, job, entry);
+    // Let scheduler.assign() pick the target worker (round-robin in Phase 8;
+    // Phase 9 PriorityAffinityScheduler can pick a different idle worker).
+    const targetIdx = this.scheduler.assign(
+      this.slots as ReadonlyArray<WorkerSlot>,
+      job,
+    );
+    const targetSlot = this.slots[targetIdx];
+    if (!targetSlot || targetSlot.busy) {
+      // Phase 8: shouldn't happen (pickNext only called when a worker just freed).
+      // Phase 9: affinity scheduler may target a busy worker; re-queue and wait.
+      this.queue.push(job);
+      return;
+    }
+
+    this.sendToWorker(targetIdx, job, entry);
   }
 
   private sendToWorker(
