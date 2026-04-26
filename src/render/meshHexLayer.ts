@@ -184,7 +184,10 @@ export function createMeshHexLayer(app: Application): MeshHexLayer {
 
     const geom = new Geometry({
       attributes: {
-        aTemplate: { buffer: templateBuf, format: 'float32x2' },
+        // stride explicit cho cả aTemplate vì WebGPU yêu cầu arrayStride;
+        // Pixi v8 PipelineSystem._createVertexBufferLayouts không auto-fill,
+        // WebGL2 thì tự suy ra từ format nên trước đó đã chạy được.
+        aTemplate: { buffer: templateBuf, format: 'float32x2', offset: 0, stride: 8 },
         aInstancePos: { buffer: instanceBuf, format: 'float32x2', offset: 0, stride: 12, instance: true },
         aInstanceColor: { buffer: instanceBuf, format: 'unorm8x4', offset: 8, stride: 12, instance: true },
       },
