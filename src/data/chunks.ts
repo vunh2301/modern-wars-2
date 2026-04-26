@@ -15,13 +15,13 @@ const INDEX_BYTES = 48;
 const FOOTER_SIZE = 32;
 
 export interface ChunkBuffers {
-  /** 6 hex template vertices × (x:f32, y:f32) pre-scaled to hexSizeWorldPx. */
-  templateBuffer: ArrayBuffer;
-  /** Per-hex instance attrs: (cx:f32, cy:f32, RGBA:u8×4) interleaved. */
-  instanceBuffer: ArrayBuffer;
-  /** Static index buffer (12 uint32 fan triangulation, shared across instances). */
+  /** 6 hex template vertices × (x:f32, y:f32) pre-scaled. Zero-copy view over the decompressed source buffer. */
+  templateBuffer: Uint8Array;
+  /** Per-hex instance attrs: (cx:f32, cy:f32, RGBA:u8×4) interleaved. Zero-copy view. */
+  instanceBuffer: Uint8Array;
+  /** Static index buffer (12 uint32 fan triangulation). Zero-copy view. */
   indexBuffer: Uint32Array;
-  /** Edge segments [x1, y1, x2, y2, …] (edge_count × 4 floats). */
+  /** Edge segments [x1, y1, x2, y2, …] (edge_count × 4 floats). Zero-copy view. */
   edgeBuffer: Float32Array;
   hexCount: number;
   edgeCount: number;
@@ -94,6 +94,23 @@ export async function loadChunk(
   return parseChunkBinary(arrayBuffer, entry);
 }
 
+/**
+ * Codex-review LOW fix: SHA-256 hash of color LUT bytes (first 12 hex chars)
+ * for runtime mismatch detection vs `chunkManifest.colorLutHash`. Same algo
+ * as `scripts/bake-chunks.ts::lutHash`. Async because Web Crypto API.
+ */
+export async function computeColorLutHash(lut: Uint32Array): Promise<string> {
+  // Copy to fresh ArrayBuffer to satisfy Web Crypto BufferSource type
+  // (input lut.buffer may be ArrayBufferLike incl. SharedArrayBuffer).
+  const bytes = new Uint8Array(lut.byteLength);
+  bytes.set(new Uint8Array(lut.buffer, lut.byteOffset, lut.byteLength));
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  const hex = Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+  return hex.slice(0, 12);
+}
+
 /** Parse MWCK v2 binary buffer → typed views. Throws on format error. */
 export function parseChunkBinary(buf: ArrayBuffer, entry: ChunkManifestEntry): ChunkBuffers {
   const view = new DataView(buf);
@@ -115,25 +132,28 @@ export function parseChunkBinary(buf: ArrayBuffer, entry: ChunkManifestEntry): C
     throw new Error(`${entry.file}: hexCount ${hexCount} ≠ manifest ${entry.hexCount}`);
   }
 
+  // Codex-review HIGH fix: zero-copy views over the decompressed buffer
+  // (was ArrayBuffer.slice() = deep copy → 3× transient alloc per chunk).
+
   // Template (48 B): 6 verts × (x:f32, y:f32) pre-scaled
   const templateOffset = HEADER_SIZE;
-  const templateBuffer = buf.slice(templateOffset, templateOffset + TEMPLATE_BYTES);
+  const templateBuffer = new Uint8Array(buf, templateOffset, TEMPLATE_BYTES);
 
   // Instance buffer (hex_count × 12 B)
   const instanceOffset = templateOffset + TEMPLATE_BYTES;
   const instanceBytes = hexCount * 12;
-  const instanceBuffer = buf.slice(instanceOffset, instanceOffset + instanceBytes);
+  const instanceBuffer = new Uint8Array(buf, instanceOffset, instanceBytes);
 
   // Static index (48 B = 12 uint32, shared fan triangulation)
   const indexOffset = instanceOffset + instanceBytes;
-  const indexBuffer = new Uint32Array(buf.slice(indexOffset, indexOffset + INDEX_BYTES));
+  const indexBuffer = new Uint32Array(buf, indexOffset, INDEX_BYTES / 4);
 
   // Edge prefix + edges
   const edgePrefixOffset = indexOffset + INDEX_BYTES;
   const edgeCount = view.getUint32(edgePrefixOffset, true);
   const edgeOffset = edgePrefixOffset + 4;
   const edgeBytes = edgeCount * 16;
-  const edgeBuffer = new Float32Array(buf.slice(edgeOffset, edgeOffset + edgeBytes));
+  const edgeBuffer = new Float32Array(buf, edgeOffset, edgeBytes / 4);
 
   // Footer
   const footerOffset = edgeOffset + edgeBytes;

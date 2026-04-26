@@ -106,9 +106,22 @@ export function createMeshHexLayer(app: Application): MeshHexLayer {
 
   const meshByKey = new Map<string, Mesh<Geometry, Shader>>();
   const bordersByKey = new Map<string, Graphics>();
+  /** Per-render-instance loading state — distinguishes "this (chunk, offset) is awaiting mount". */
   const inFlight = new Set<string>();
+  /** Per-CHUNK-FILE in-flight promises — dedupes fetch across wrap-instance offsets. Codex-review HIGH fix. */
+  const inFlightByCache = new Map<string, Promise<ChunkBuffers>>();
   let visibleSet = new Set<string>();
   const builtOrder: string[] = [];
+
+  // BLOCKER fix: Pixi v8 Mesh.destroy({children:true}) does NOT cascade to
+  // Geometry/Buffer destroy. Codex review found leaking GPU buffers across
+  // LRU eviction, tier switch, and layer destroy. Helper enforces explicit
+  // geom.destroy(true) after mesh.destroy.
+  const destroyMesh = (m: Mesh<Geometry, Shader>): void => {
+    const geom = m.geometry;
+    m.destroy({ children: true });
+    geom.destroy(true);
+  };
 
   const stats: MeshHexLayerStats = {
     totalChunks: 0,
@@ -132,7 +145,7 @@ export function createMeshHexLayer(app: Application): MeshHexLayer {
       if (evictIdx < 0) break;
       const evicted = builtOrder.splice(evictIdx, 1)[0]!;
       const m = meshByKey.get(evicted);
-      if (m) { m.destroy({ children: true }); meshByKey.delete(evicted); }
+      if (m) { destroyMesh(m); meshByKey.delete(evicted); }
       const g = bordersByKey.get(evicted);
       if (g) { g.destroy(); bordersByKey.delete(evicted); }
       stats.builtChunks--;
@@ -145,14 +158,15 @@ export function createMeshHexLayer(app: Application): MeshHexLayer {
     const t0 = performance.now();
 
     // Phase 7 Iter 2: instanced rendering (MWCK v2). 10× smaller GPU footprint
-    // than v1 (per-vertex packed). Template (48 B) + instance attrs (12 B/hex)
-    // + shared static index (48 B for fan triangulation).
+    // than v1. Template (48 B) + per-hex instance (12 B) + shared static index.
+    // Codex-review HIGH fix: ChunkBuffers fields are now zero-copy views;
+    // PixiBuffer accepts the typed-array view directly (no extra wrap).
     const templateBuf = new PixiBuffer({
-      data: new Uint8Array(buffers.templateBuffer),
+      data: buffers.templateBuffer,
       usage: BufferUsage.VERTEX | BufferUsage.COPY_DST,
     });
     const instanceBuf = new PixiBuffer({
-      data: new Uint8Array(buffers.instanceBuffer),
+      data: buffers.instanceBuffer,
       usage: BufferUsage.VERTEX | BufferUsage.COPY_DST,
     });
     const idxBuf = new PixiBuffer({
@@ -206,31 +220,58 @@ export function createMeshHexLayer(app: Application): MeshHexLayer {
     performance.measure('chunk-build', 'chunk-build-start', 'chunk-build-end');
   };
 
-  const handleLoaded = (key: string, entry: ChunkManifestEntry, offsetX: number, tierAtRequest: string, buffers: ChunkBuffers): void => {
-    inFlight.delete(key);
-    stats.inFlight = inFlight.size;
-    if (currentTierName !== tierAtRequest) return; // tier switched
-    chunkCache.set(`${currentTierName}:${entry.id}`, buffers);
-    if (visibleSet.has(key)) {
-      buildMesh(key, buffers, offsetX);
-      evictIfNeeded();
-    }
+  /**
+   * Codex-review HIGH fix: dedupe fetch by chunk-file key (`${tier}:${chunkId}`)
+   * not render key (`${chunkId}@${offsetX}`). 3 wrap copies of the SAME chunk
+   * binary now share a single fetch + decompress + parse pipeline (avoids 3×
+   * redundant work + transient ArrayBuffers).
+   */
+  const startCacheFetch = (cacheKey: string, entry: ChunkManifestEntry, tierAtRequest: string): Promise<ChunkBuffers> => {
+    const sig = abortController.signal;
+    stats.cacheMisses++;
+    const promise = loadChunk(entry, sig)
+      .then((buffers) => {
+        if (currentTierName === tierAtRequest) chunkCache.set(cacheKey, buffers);
+        return buffers;
+      })
+      .finally(() => {
+        inFlightByCache.delete(cacheKey);
+      });
+    inFlightByCache.set(cacheKey, promise);
+    return promise;
   };
 
   const fetchAndMount = (key: string, entry: ChunkManifestEntry, offsetX: number): void => {
+    if (meshByKey.has(key)) return;
     if (inFlight.has(key)) return;
+    if (!currentTierName) return;
+    const cacheKey = `${currentTierName}:${entry.id}`;
+    const cached = chunkCache.get(cacheKey);
+    if (cached) {
+      stats.cacheHits++;
+      buildMesh(key, cached, offsetX);
+      evictIfNeeded();
+      return;
+    }
     inFlight.add(key);
     stats.inFlight = inFlight.size;
-    stats.cacheMisses++;
-    const tierAtRequest = currentTierName!;
-    const sig = abortController.signal;
-    void loadChunk(entry, sig)
-      .then((buffers) => handleLoaded(key, entry, offsetX, tierAtRequest, buffers))
+    const tierAtRequest = currentTierName;
+    let promise = inFlightByCache.get(cacheKey);
+    if (!promise) promise = startCacheFetch(cacheKey, entry, tierAtRequest);
+    void promise
+      .then((buffers) => {
+        inFlight.delete(key);
+        stats.inFlight = inFlight.size;
+        if (currentTierName !== tierAtRequest) return;
+        if (!visibleSet.has(key)) return;
+        buildMesh(key, buffers, offsetX);
+        evictIfNeeded();
+      })
       .catch((err: unknown) => {
         inFlight.delete(key);
         stats.inFlight = inFlight.size;
         if (err instanceof DOMException && err.name === 'AbortError') return;
-        console.warn(`[mesh-hex] chunk ${key} load failed`, err);
+        console.warn(`[mesh-hex] chunk ${key} (${cacheKey}) load failed`, err);
       });
   };
 
@@ -242,14 +283,15 @@ export function createMeshHexLayer(app: Application): MeshHexLayer {
     abortController.abort();
     abortController = new AbortController();
 
-    // Tear down current meshes + borders.
-    for (const m of meshByKey.values()) m.destroy({ children: true });
+    // Tear down current meshes + borders. BLOCKER fix: explicit geom.destroy.
+    for (const m of meshByKey.values()) destroyMesh(m);
     for (const g of bordersByKey.values()) g.destroy();
     meshByKey.clear();
     bordersByKey.clear();
     builtOrder.length = 0;
     visibleSet = new Set();
     inFlight.clear();
+    inFlightByCache.clear();
     chunkCache.clear();
     stats.builtChunks = 0;
     stats.visibleChunks = 0;
@@ -360,10 +402,12 @@ export function createMeshHexLayer(app: Application): MeshHexLayer {
 
   const destroy = (): void => {
     abortController.abort();
-    for (const m of meshByKey.values()) m.destroy({ children: true });
+    // BLOCKER fix: explicit geom.destroy on every mesh.
+    for (const m of meshByKey.values()) destroyMesh(m);
     for (const g of bordersByKey.values()) g.destroy();
     meshByKey.clear();
     bordersByKey.clear();
+    inFlightByCache.clear();
     chunkCache.clear();
     shader.destroy();
     root.destroy({ children: true });

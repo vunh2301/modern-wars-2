@@ -23,7 +23,11 @@ import { mkdirSync, existsSync, writeFileSync } from 'node:fs';
 
 const URL = process.env.URL ?? 'http://localhost:4173/';
 const OUT_DIR = 'bench-results';
-const OUT_FILE = `${OUT_DIR}/phase-6-final.json`;
+// Codex review MEDIUM fix: write to phase-7-final.json by default; phase-6
+// baseline preserved on disk. Override via OUT_FILE env if running Phase 6.
+const OUT_FILE = process.env.OUT_FILE ?? `${OUT_DIR}/phase-7-final.json`;
+// Apply stricter Phase 7 gates by default (PHASE7_PROMPT spec).
+const PHASE = (process.env.PHASE ?? '7') as '6' | '7';
 
 interface ScenarioResult {
   name: string;
@@ -289,35 +293,43 @@ function checkGates(scenarios: ScenarioResult[], cumulative: any): FinalReport['
   const buildMs = cumulative.chunkBuildMs ?? { p95: 0, max: 0 };
   const memMb = cumulative.memoryMb ?? 0;
 
+  // Codex review MEDIUM fix: Phase 7 stricter thresholds (PHASE7_PROMPT spec).
+  // PHASE=6 env override falls back to original Phase 6 acceptance criteria.
+  const isP7 = PHASE === '7';
+  const tierSwitch_50_25_target = isP7 ? 30 : 50;
+  const tierSwitch_25_10_target = isP7 ? 50 : 80;
+  const fps_p95_target = isP7 ? 90 : 58;
+  const fps_pinch_target = isP7 ? 90 : 55;
+  const chunk_build_target = isP7 ? 5 : 8;
+
   const gates: FinalReport['gates'] = [
     {
-      name: 'tier_switch_50to25_under_50ms',
-      target: '< 50 ms',
+      name: `tier_switch_50to25_under_${tierSwitch_50_25_target}ms`,
+      target: `< ${tierSwitch_50_25_target} ms`,
       actual: `${tierSwitch['50km->25km'] ?? 'n/a'} ms`,
-      pass: typeof tierSwitch['50km->25km'] === 'number' && tierSwitch['50km->25km'] < 50,
+      pass: typeof tierSwitch['50km->25km'] === 'number' && tierSwitch['50km->25km'] < tierSwitch_50_25_target,
     },
     {
-      name: 'tier_switch_25to10_under_80ms',
-      target: '< 80 ms',
+      name: `tier_switch_25to10_under_${tierSwitch_25_10_target}ms`,
+      target: `< ${tierSwitch_25_10_target} ms`,
       actual: `${tierSwitch['25km->10km'] ?? 'n/a'} ms`,
-      pass: typeof tierSwitch['25km->10km'] === 'number' && tierSwitch['25km->10km'] < 80,
+      pass: typeof tierSwitch['25km->10km'] === 'number' && tierSwitch['25km->10km'] < tierSwitch_25_10_target,
     },
     {
-      name: 'pan_storm_10km_fps_p95_ge_58',
-      target: '≥ 58 fps',
+      name: `pan_storm_10km_fps_p95_ge_${fps_p95_target}`,
+      target: `≥ ${fps_p95_target} fps`,
       actual: `${s1?.fps_p95 ?? 'n/a'} fps`,
-      pass: (s1?.fps_p95 ?? 0) >= 58,
+      pass: (s1?.fps_p95 ?? 0) >= fps_p95_target,
     },
     {
-      name: 'pinch_zoom_fps_p95_ge_55',
-      target: '≥ 55 fps',
+      name: `pinch_zoom_fps_p95_ge_${fps_pinch_target}`,
+      target: `≥ ${fps_pinch_target} fps`,
       actual: `${s2?.fps_p95 ?? 'n/a'} fps`,
-      pass: (s2?.fps_p95 ?? 0) >= 55,
+      pass: (s2?.fps_p95 ?? 0) >= fps_pinch_target,
     },
     {
       name: 'memory_peak_under_250mb',
       target: '< 250 MB',
-      // Per-scenario max instead of cumulative — true peak during pan/zoom.
       actual: `${Math.max(...scenarios.map((s) => s.memoryMb_max), memMb)} MB (cum=${memMb})`,
       pass: Math.max(...scenarios.map((s) => s.memoryMb_max), memMb) > 0
             && Math.max(...scenarios.map((s) => s.memoryMb_max), memMb) < 250,
@@ -329,16 +341,16 @@ function checkGates(scenarios: ScenarioResult[], cumulative: any): FinalReport['
       pass: (s1?.visibleChunks_max ?? 0) > 0 && (s1?.visibleChunks_max ?? 99) <= 12,
     },
     {
-      name: 'chunk_build_p95_under_8ms',
-      target: '< 8 ms',
+      name: `chunk_build_p95_under_${chunk_build_target}ms`,
+      target: `< ${chunk_build_target} ms`,
       actual: `${buildMs.p95} ms (max ${buildMs.max} ms)`,
-      pass: buildMs.p95 > 0 && buildMs.p95 < 8,
+      pass: buildMs.p95 > 0 && buildMs.p95 < chunk_build_target,
     },
     {
-      name: 'antimeridian_pan_10km_fps_p95_ge_58',
-      target: '≥ 58 fps',
+      name: `antimeridian_pan_10km_fps_p95_ge_${fps_p95_target}`,
+      target: `≥ ${fps_p95_target} fps`,
       actual: `${s4?.fps_p95 ?? 'n/a'} fps`,
-      pass: (s4?.fps_p95 ?? 0) >= 58,
+      pass: (s4?.fps_p95 ?? 0) >= fps_p95_target,
     },
   ];
   return gates;

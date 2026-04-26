@@ -19,6 +19,7 @@ import { createBenchmark } from './render/benchmark';
 import { loadManifest } from './data/manifest';
 import { loadCountries } from './data/countries';
 import { loadTier } from './data/tiers';
+import { loadChunksManifest, computeColorLutHash } from './data/chunks';
 import { buildColorLut } from './render/colors';
 import { pickTier } from './render/lod';
 
@@ -70,6 +71,26 @@ async function bootstrap(): Promise<void> {
   const [manifest, countries] = await Promise.all([loadManifest(), loadCountries()]);
   const lut = buildColorLut(countries.countries);
   const availableTiers = new Set(Object.keys(manifest.tiles));
+
+  // Codex-review LOW fix: validate baked colorLutHash matches runtime LUT.
+  // If countries.json edited without re-running `bake:chunks`, mesh tints
+  // would silently drift from particle-engine reference. Warn (don't fail).
+  if (engine === 'mesh') {
+    void (async () => {
+      try {
+        const chunksManifest = await loadChunksManifest();
+        const runtimeHash = await computeColorLutHash(lut);
+        if (chunksManifest.colorLutHash !== runtimeHash) {
+          console.warn(
+            `[mesh-hex] colorLutHash mismatch — baked=${chunksManifest.colorLutHash} runtime=${runtimeHash}. ` +
+            'Re-run `npm run bake:chunks` after countries.json changes, or use ?engine=particles to render with runtime tints.',
+          );
+        }
+      } catch (err) {
+        console.warn('[mesh-hex] colorLutHash check failed', err);
+      }
+    })();
+  }
 
   // Build unified layer adapter — both engines satisfy the same interface.
   let hexLayer: UnifiedHexLayer;

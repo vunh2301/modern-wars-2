@@ -174,21 +174,27 @@
   "hotPaths": [
     {
       "path": "src\\main.ts",
-      "accessCount": 41,
-      "lastAccessed": 1777188852057,
+      "accessCount": 44,
+      "lastAccessed": 1777194533376,
       "type": "file"
     },
     {
       "path": "src\\render\\hexLayer.ts",
-      "accessCount": 40,
-      "lastAccessed": 1777184897087,
+      "accessCount": 41,
+      "lastAccessed": 1777193710923,
       "type": "file"
     },
     {
       "path": "src\\render\\viewport.ts",
-      "accessCount": 19,
-      "lastAccessed": 1777185235979,
+      "accessCount": 20,
+      "lastAccessed": 1777193790867,
       "type": "file"
+    },
+    {
+      "path": "src",
+      "accessCount": 16,
+      "lastAccessed": 1777193793248,
+      "type": "directory"
     },
     {
       "path": "scripts\\verify-screenshot.mjs",
@@ -197,27 +203,27 @@
       "type": "file"
     },
     {
-      "path": "src",
-      "accessCount": 12,
-      "lastAccessed": 1777180877204,
-      "type": "directory"
+      "path": "scripts\\bench-phase6.ts",
+      "accessCount": 14,
+      "lastAccessed": 1777194480347,
+      "type": "file"
     },
     {
-      "path": "scripts\\bench-phase6.ts",
-      "accessCount": 12,
-      "lastAccessed": 1777183755875,
+      "path": "src\\geo\\projection.ts",
+      "accessCount": 9,
+      "lastAccessed": 1777193710389,
       "type": "file"
+    },
+    {
+      "path": "",
+      "accessCount": 9,
+      "lastAccessed": 1777193794817,
+      "type": "directory"
     },
     {
       "path": ".screenshots\\06-bering.png",
       "accessCount": 8,
       "lastAccessed": 1777174794782,
-      "type": "file"
-    },
-    {
-      "path": "src\\geo\\projection.ts",
-      "accessCount": 8,
-      "lastAccessed": 1777182022550,
       "type": "file"
     },
     {
@@ -233,6 +239,12 @@
       "type": "file"
     },
     {
+      "path": "src\\render\\benchmark.ts",
+      "accessCount": 7,
+      "lastAccessed": 1777193703659,
+      "type": "file"
+    },
+    {
       "path": ".screenshots\\01-fit.png",
       "accessCount": 6,
       "lastAccessed": 1777174795345,
@@ -245,21 +257,15 @@
       "type": "file"
     },
     {
-      "path": "src\\render\\benchmark.ts",
-      "accessCount": 6,
-      "lastAccessed": 1777188767983,
-      "type": "file"
-    },
-    {
-      "path": "",
-      "accessCount": 5,
-      "lastAccessed": 1777180860023,
-      "type": "directory"
-    },
-    {
       "path": "src\\data\\tiers.ts",
       "accessCount": 4,
       "lastAccessed": 1777188212035,
+      "type": "file"
+    },
+    {
+      "path": "package.json",
+      "accessCount": 4,
+      "lastAccessed": 1777193729895,
       "type": "file"
     },
     {
@@ -275,9 +281,9 @@
       "type": "file"
     },
     {
-      "path": "package.json",
+      "path": "tsconfig.json",
       "accessCount": 3,
-      "lastAccessed": 1777188363602,
+      "lastAccessed": 1777193729888,
       "type": "file"
     },
     {
@@ -320,12 +326,6 @@
       "path": "src\\render\\stage.ts",
       "accessCount": 2,
       "lastAccessed": 1777182047081,
-      "type": "file"
-    },
-    {
-      "path": "tsconfig.json",
-      "accessCount": 2,
-      "lastAccessed": 1777182048653,
       "type": "file"
     },
     {
