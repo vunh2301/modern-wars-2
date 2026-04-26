@@ -229,13 +229,18 @@ export function createMeshHexLayer(app: Application): MeshHexLayer {
   const startCacheFetch = (cacheKey: string, entry: ChunkManifestEntry, tierAtRequest: string): Promise<ChunkBuffers> => {
     const sig = abortController.signal;
     stats.cacheMisses++;
-    const promise = loadChunk(entry, sig)
+    // Capture promise ref so finally() only deletes its OWN entry (not a
+    // newer promise registered after this one was aborted+restarted under
+    // rapid LOD churn — Codex re-review LOW fix).
+    const promise: Promise<ChunkBuffers> = loadChunk(entry, sig)
       .then((buffers) => {
         if (currentTierName === tierAtRequest) chunkCache.set(cacheKey, buffers);
         return buffers;
       })
       .finally(() => {
-        inFlightByCache.delete(cacheKey);
+        if (inFlightByCache.get(cacheKey) === promise) {
+          inFlightByCache.delete(cacheKey);
+        }
       });
     inFlightByCache.set(cacheKey, promise);
     return promise;
