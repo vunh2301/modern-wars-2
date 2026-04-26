@@ -1,6 +1,6 @@
 {
   "meta": {
-    "timestamp": "2026-04-26T17:42:14.611Z",
+    "timestamp": "2026-04-26T18:04:07.567Z",
     "url": "http://localhost:4173/",
     "viewport": "430×932 @ DPR2 (iPhone 13 Pro Max emulated)",
     "note": "Headless Chromium, NOT real iPhone. Worker memory excluded from performance.memory (main thread only). Total process memory = main + worker heaps; use DevTools Performance > Memory for full view. A/B: worker=on (Phase 8 default) vs worker=off (Phase 7.9 fallback)."
@@ -12,65 +12,67 @@
         "name": "pan_storm_10km_30s",
         "workerMode": "on",
         "durationMs": 30000,
-        "fpsSamples": 277,
+        "fpsSamples": 280,
         "fps_p50": 144.9,
         "fps_p95": 142.9,
         "fps_p99": 140.8,
         "fps_min": 140.8,
         "visibleChunks_max": 18,
-        "memoryMb_max": 163.1,
-        "memoryMb_settled": 135.5
+        "memoryMb_max": 164,
+        "memoryMb_settled": 136.3
       },
       {
         "name": "pinch_zoom_60s",
         "workerMode": "on",
         "durationMs": 60000,
-        "fpsSamples": 557,
+        "fpsSamples": 559,
         "fps_p50": 144.9,
         "fps_p95": 142.9,
         "fps_p99": 140.8,
-        "fps_min": 20.6,
+        "fps_min": 140.8,
         "visibleChunks_max": 15,
-        "memoryMb_max": 546.9,
+        "memoryMb_max": 526.8,
         "memoryMb_settled": 276
       },
       {
         "name": "antimeridian_pan_60s",
         "workerMode": "on",
         "durationMs": 60000,
-        "fpsSamples": 561,
+        "fpsSamples": 559,
         "fps_p50": 144.9,
         "fps_p95": 142.9,
         "fps_p99": 140.8,
         "fps_min": 140.8,
         "visibleChunks_max": 18,
-        "memoryMb_max": 454.3,
-        "memoryMb_settled": 258.8
+        "memoryMb_max": 452.3,
+        "memoryMb_settled": 232.3
       }
     ],
     "latency": {
       "name": "worker_latency_1000_jobs",
       "workerMode": "on",
       "jobCount": 1072,
-      "p50Ms": 3.4,
-      "p95Ms": 6.8,
-      "p99Ms": 9.8,
-      "maxMs": 17,
+      "successCount": 1000,
+      "failedCount": 0,
+      "p50Ms": 3.5,
+      "p95Ms": 7,
+      "p99Ms": 9.2,
+      "maxMs": 22.7,
       "queueFullRejects": 0
     },
     "cumulative": {
       "fps_p50": 144.9,
       "fps_p95": 142.9,
       "fps_p99": 140.8,
-      "fps_min": 140.8,
+      "fps_min": 71.4,
       "tierSwitchMs": {
-        "25km->10km": 0.2,
+        "25km->10km": 0.1,
         "10km->25km": 0.1
       },
       "chunkBuildMs": {
         "p50": 0.4,
         "p95": 2,
-        "max": 4.2,
+        "max": 4.3,
         "count": 396
       },
       "visibleChunks": {
@@ -78,17 +80,17 @@
         "max": 18,
         "avg": 18
       },
-      "memoryMb": 312.7,
+      "memoryMb": 239.7,
       "samples": {
-        "fps": 555,
+        "fps": 567,
         "chunkBuild": 396
       },
       "worker": {
         "mode": "worker",
         "poolSize": 4,
         "totalJobs": 1072,
-        "avgLatencyMs": 3.8,
-        "p95LatencyMs": 7.1,
+        "avgLatencyMs": 4.3,
+        "p95LatencyMs": 7.2,
         "activeJobs": 0,
         "queueDepth": 0,
         "queueFullRejects": 0,
@@ -104,27 +106,27 @@
         "name": "pan_storm_10km_30s",
         "workerMode": "off",
         "durationMs": 30000,
-        "fpsSamples": 278,
+        "fpsSamples": 281,
         "fps_p50": 144.9,
-        "fps_p95": 140.8,
+        "fps_p95": 142.9,
         "fps_p99": 140.8,
         "fps_min": 140.8,
         "visibleChunks_max": 18,
-        "memoryMb_max": 164.1,
-        "memoryMb_settled": 135.6
+        "memoryMb_max": 188.5,
+        "memoryMb_settled": 142.3
       },
       {
         "name": "pinch_zoom_60s",
         "workerMode": "off",
         "durationMs": 60000,
-        "fpsSamples": 556,
+        "fpsSamples": 557,
         "fps_p50": 144.9,
         "fps_p95": 142.9,
         "fps_p99": 140.8,
-        "fps_min": 73,
-        "visibleChunks_max": 15,
-        "memoryMb_max": 452.3,
-        "memoryMb_settled": 452.3
+        "fps_min": 140.8,
+        "visibleChunks_max": 18,
+        "memoryMb_max": 491,
+        "memoryMb_settled": 146.8
       },
       {
         "name": "antimeridian_pan_60s",
@@ -136,14 +138,16 @@
         "fps_p99": 140.8,
         "fps_min": 140.8,
         "visibleChunks_max": 18,
-        "memoryMb_max": 302.8,
-        "memoryMb_settled": 263.3
+        "memoryMb_max": 333.1,
+        "memoryMb_settled": 266.2
       }
     ],
     "latency": {
       "name": "worker_latency_1000_jobs",
       "workerMode": "off",
       "jobCount": 0,
+      "successCount": 0,
+      "failedCount": 0,
       "p50Ms": 0,
       "p95Ms": 0,
       "p99Ms": 0,
@@ -156,24 +160,24 @@
       "fps_p99": 140.8,
       "fps_min": 140.8,
       "tierSwitchMs": {
-        "25km->10km": 0.2,
+        "25km->10km": 0.1,
         "10km->25km": 0.2
       },
       "chunkBuildMs": {
-        "p50": 0.4,
-        "p95": 1.8,
-        "max": 3.6,
-        "count": 396
+        "p50": 0.3,
+        "p95": 1.5,
+        "max": 3.4,
+        "count": 459
       },
       "visibleChunks": {
         "min": 15,
         "max": 18,
         "avg": 15.3
       },
-      "memoryMb": 262.1,
+      "memoryMb": 266.3,
       "samples": {
         "fps": 1800,
-        "chunkBuild": 396
+        "chunkBuild": 459
       },
       "worker": {
         "mode": "main",
@@ -215,7 +219,7 @@
     {
       "name": "tier_switch_p95_under_5ms",
       "target": "< 5 ms",
-      "actual": "0.2 ms",
+      "actual": "0.1 ms",
       "pass": true,
       "hard": true
     },
@@ -229,7 +233,7 @@
     {
       "name": "post_message_roundtrip_p95_under_10ms",
       "target": "< 10 ms",
-      "actual": "7.1 ms",
+      "actual": "7.2 ms",
       "pass": true,
       "hard": true
     },
@@ -241,6 +245,13 @@
       "hard": true
     },
     {
+      "name": "scenario4_successful_jobs_gte_99pct",
+      "target": "≥ 99% of scenario 4 jobs succeed (no silent decode failures)",
+      "actual": "1000/1000 (100.0%)",
+      "pass": true,
+      "hard": true
+    },
+    {
       "name": "worker_pool_not_degraded",
       "target": "pool.degraded === false (DecompressionStream OK in all workers)",
       "actual": "healthy",
@@ -248,9 +259,9 @@
       "hard": true
     },
     {
-      "name": "memory_settled_under_550mb",
-      "target": "< 550 MB",
-      "actual": "312.7 MB",
+      "name": "memory_settled_under_400mb",
+      "target": "< 400 MB",
+      "actual": "276 MB",
       "pass": true,
       "hard": true
     },
@@ -264,7 +275,7 @@
     {
       "name": "ab_parity_worker_off_pan_storm_10km_30s",
       "target": "?worker=off within ±2% of Phase 7.9 baseline 140.8 fps",
-      "actual": "140.8 fps (0.0% from baseline)",
+      "actual": "142.9 fps (1.5% from baseline)",
       "pass": true,
       "hard": true
     },
@@ -285,7 +296,7 @@
     {
       "name": "memory_peak_under_500mb_informational",
       "target": "< 500 MB (INFORMATIONAL — worker heap excluded from performance.memory)",
-      "actual": "546.9 MB",
+      "actual": "526.8 MB",
       "pass": false,
       "hard": false
     },
