@@ -173,15 +173,15 @@
   },
   "hotPaths": [
     {
-      "path": "src\\main.ts",
-      "accessCount": 48,
-      "lastAccessed": 1777204005851,
+      "path": "src\\render\\hexLayer.ts",
+      "accessCount": 54,
+      "lastAccessed": 1777204863674,
       "type": "file"
     },
     {
-      "path": "src\\render\\hexLayer.ts",
-      "accessCount": 47,
-      "lastAccessed": 1777204554191,
+      "path": "src\\main.ts",
+      "accessCount": 48,
+      "lastAccessed": 1777204005851,
       "type": "file"
     },
     {

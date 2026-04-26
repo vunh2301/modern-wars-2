@@ -127,7 +127,7 @@ export function createHexLayer(app: Application): HexLayer {
   // pan-around-world doesn't accumulate full 96-instance heap (785 MB observed
   // → ~150 MB target). Build order = FIFO age. Evict oldest non-visible.
   // 24 = arch § 14 worst-case (12 visible × 2 wrap copies straddling seam).
-  const MAX_BUILT_INSTANCES = 24;
+  const MAX_BUILT_INSTANCES = 48;
   const builtOrder: Array<{ chunk: ChunkData; offsetX: number }> = [];
 
   const isCurrentlyVisible = (chunk: ChunkData, offsetX: number): boolean => {
@@ -305,15 +305,17 @@ export function createHexLayer(app: Application): HexLayer {
     const t0 = performance.now();
     performance.mark('cull-query-start');
 
-    // 1-chunk margin (D-5) — covers cross-chunk border edges (§ 8.6) and
-    // prevents flicker on micro-pan. Margin sized to chunk extent of THIS tier.
+    // 2-chunk margin (2026-04-26): pre-fetch chunks before they enter viewport
+    // to eliminate "ô vuông đen nháy" flash. Same fix as meshHex (3b0f347).
     const chunkW = chunkGrid.chunks[0]?.bbox.width ?? 0;
     const chunkH = chunkGrid.chunks[0]?.bbox.height ?? 0;
+    const marginX = chunkW * 2;
+    const marginY = chunkH * 2;
     const expanded = {
-      minX: bbox.minX - chunkW,
-      minY: bbox.minY - chunkH,
-      maxX: bbox.maxX + chunkW,
-      maxY: bbox.maxY + chunkH,
+      minX: bbox.minX - marginX,
+      minY: bbox.minY - marginY,
+      maxX: bbox.maxX + marginX,
+      maxY: bbox.maxY + marginY,
     };
 
     const nowEntries = chunkGrid.spatialIndex.search(expanded);
