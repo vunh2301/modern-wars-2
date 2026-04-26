@@ -7,7 +7,7 @@
 > Branch: phase-8-worker-pool (off main, AFTER current state merge)
 > Owner: Claude Code Sonnet 4.6 + Claude Opus 4.7 reviewer
 > Estimated effort: 14-18h
-> Spec rev: 2 (post-Opus + Codex review, score 9.5+ targeted)
+> Spec rev: 3 (post-Opus 9.4 + Codex 9.1 re-review — addresses CancelJob soundness, QueueFullError shape, SchedulingStrategy seam expansion, fallback matrix DS lock, runtime guard, Vite caveat)
 
 ---
 
@@ -76,20 +76,37 @@ priority/affinity. Phase 8 leaves the seam.
 
 **Compile-time exhaustiveness is REQUIRED, not just checklist.**
 
+**Rev 3 split:** Cancel is a control message, not a dispatchable job. Putting cancel into
+WorkerJob made `ResultFor<'cancel'>` resolve to `never` (Opus HIGH finding). Solution:
+two distinct unions — `DispatchableJob` for jobs that flow through `pool.dispatch()`
+(must have a result), and `ControlMessage` for internal pool ↔ worker plumbing.
+
 src/workers/types.ts:
 
 ```ts
 import type { ChunkManifestEntry } from '../data/chunks';
 
-// ─── Job request union ─────────────────────────────────────────────────────
-export type WorkerJob =
+// ─── Dispatchable jobs (each MUST have matching result) ────────────────────
+// Anything in this union is dispatch()-able; ResultFor<TType> guarantees a
+// result type via Extract<WorkerResult, { type: TType }>.
+export type DispatchableJob =
   | DecodeChunkJob
-  | CancelJob
   | PathfindJob       // Phase 9 stub (interface only, worker throws "not impl")
   | AiTickJob         // Phase 9 stub
   | CombatJob;        // Phase 10+ stub
 
-// Phase 8 IMPLEMENTS these two:
+// ─── Control messages (internal pool ↔ worker, NOT dispatch()-able) ───────
+// CancelMessage flows main → worker via direct postMessage by pool.cancel(id).
+// Worker → main: 'ready' handshake on spawn, 'cancel-ack' optional.
+export type ControlMessage =
+  | { type: 'cancel'; targetId: string }
+  | { type: 'ready'; supportsDecompressionStream: boolean }
+  | { type: 'cancel-ack'; targetId: string };
+
+// Combined wire-format for worker postMessage (job OR control).
+export type WorkerInbound = DispatchableJob | ControlMessage;
+
+// Phase 8 IMPLEMENTS:
 export interface DecodeChunkJob {
   type: 'decode-chunk';
   id: string;
@@ -97,12 +114,6 @@ export interface DecodeChunkJob {
   // (entry.hexCount), and bbox-based downstream work. NOT just (tier, col, row).
   entry: ChunkManifestEntry;
   tier: string;          // tierName, used for cacheKey on main thread
-}
-
-export interface CancelJob {
-  type: 'cancel';
-  id: string;            // job id this cancel targets
-  targetId: string;      // id of job to cancel
 }
 
 // Phase 9 STUBS (interface locked, worker returns 'not-implemented' error):
@@ -178,7 +189,11 @@ export type CombatResult =
   | { type: 'combat'; id: string; ok: false; error: string; errorName: string };
 
 // ─── Type-level mapping for sound dispatch ──────────────────────────────────
-export type ResultFor<TType extends WorkerJob['type']> = Extract<WorkerResult, { type: TType }>;
+// Note: keyed by DispatchableJob (NOT WorkerInbound) — control messages don't
+// have results. ResultFor<'cancel'> would never resolve, so cancel is excluded
+// at the type level by construction.
+export type ResultFor<TType extends DispatchableJob['type']> =
+  Extract<WorkerResult, { type: TType }>;
 
 // ─── Exhaustiveness helper ──────────────────────────────────────────────────
 export function assertNever(x: never, ctx: string): never {
@@ -190,34 +205,97 @@ export function assertNever(x: never, ctx: string): never {
 node × ~100 nodes/path × 400 paths/sec = 80k garbage objects/sec. Use packed `Int16Array`
 buffer transferred zero-copy. Phase 9 implements; Phase 8 only locks the interface shape.
 
-### C. Job dispatcher pattern + cancellation protocol
+### C. Job dispatcher pattern + cancellation protocol + scheduling
+
+**Rev 3 expand seam (Codex HIGH):** Phase 8's `DispatchStrategy =
+(workers, job) => workerIndex` is too narrow. It only chooses worker placement and
+cannot reorder queued jobs (e.g., bump a high-priority pathfind ahead of 100 queued
+decode jobs). Phase 9 needs queue policy, not just assignment. Spec rev 3 widens to
+`SchedulingStrategy` which owns BOTH queue management AND worker assignment.
 
 ```ts
 // src/workers/pool.ts
+
+export interface WorkerSlot {
+  index: number;
+  busy: boolean;
+  inFlightJobId: string | null;
+}
+
+/** Scheduling policy owns the queue + assignment. Phase 8 default = FIFO + round-robin.
+ *  Phase 9 swaps to priority queue + affinity without changing pool API. */
+export interface SchedulingStrategy {
+  /** Called when a new job arrives. Strategy decides: enqueue, drop, or dispatch now. */
+  enqueue(job: DispatchableJob, queue: QueueAccessor): EnqueueResult;
+  /** Called when a worker becomes idle. Strategy picks next job from queue (or null). */
+  pickNext(workers: ReadonlyArray<WorkerSlot>, queue: QueueAccessor): DispatchableJob | null;
+  /** Worker assignment for the picked job. Default round-robin via internal counter. */
+  assign(workers: ReadonlyArray<WorkerSlot>, job: DispatchableJob): number;
+}
+
+export interface QueueAccessor {
+  size(): number;
+  capacity(): number;
+  push(job: DispatchableJob): boolean;   // false if at cap
+  popById(jobId: string): boolean;
+  peek(filter?: (j: DispatchableJob) => boolean): DispatchableJob | undefined;
+  shift(): DispatchableJob | undefined;
+}
+
+export type EnqueueResult =
+  | { kind: 'queued' }
+  | { kind: 'dispatched-immediately'; workerIndex: number }
+  | { kind: 'rejected'; reason: 'queue-full' };
+
 export interface WorkerPoolOptions {
   size?: number;                     // default 4
   lazy?: boolean;                    // default true (spawn on first dispatch)
-  dispatchStrategy?: DispatchStrategy;
+  scheduler?: SchedulingStrategy;    // default = FifoRoundRobinScheduler
   maxQueueDepth?: number;            // default 2 × size
   workerUrl?: URL;                   // injectable for tests
 }
 
 export class WorkerPool {
   constructor(opts?: WorkerPoolOptions);
-  /** Sound dispatch: result type narrowed by job.type. */
-  dispatch<TType extends WorkerJob['type']>(
-    job: WorkerJob & { type: TType }
+  /** Sound dispatch: result type narrowed by job.type via DispatchableJob['type'] union.
+   *  Throws QueueFullError synchronously (BEFORE returning Promise) when scheduler
+   *  rejects with 'queue-full'. Caller catches and decides retry policy. */
+  dispatch<TType extends DispatchableJob['type']>(
+    job: DispatchableJob & { type: TType }
   ): Promise<ResultFor<TType>>;
-  /** Cancel a pending or in-flight job. Sends 'cancel' message to assigned worker.
-   * Pending: removed from queue, promise rejects with AbortError.
-   * In-flight: worker's job-side cancel flag set; worker forwards to internal fetch().
+  /** Cancel a pending or in-flight job. Sends 'cancel' ControlMessage to assigned worker.
+   * Pending: removed from queue, promise rejects with DOMException('Aborted', 'AbortError').
+   * In-flight: worker's job-side AbortController triggered; worker forwards to fetch().
    * Result discarded on completion. */
   cancel(jobId: string): void;
-  /** Eager init for cold-start avoidance. */
+  /** Eager init for cold-start avoidance. Resolves after all 'ready' handshakes received. */
   warmup(): Promise<void>;
   destroy(): void;
+  /** Runtime-introspected scheduler stats (HUD/bench). */
+  stats(): { poolSize: number; activeJobs: number; queueDepth: number; queueFullRejects: number };
+}
+
+/** Built-in scheduler — Phase 8 default. Phase 9 ships PriorityAffinityScheduler. */
+export class FifoRoundRobinScheduler implements SchedulingStrategy { /* ... */ }
+
+/** Thrown synchronously by dispatch() when scheduler rejects with queue-full.
+ *  Caller catches and decides: retry on next frame, drop silently, or surface error. */
+export class QueueFullError extends Error {
+  constructor(
+    public readonly job: DispatchableJob,
+    public readonly currentQueueSize: number,
+    public readonly capacity: number,
+  ) {
+    super(`WorkerPool queue full (${currentQueueSize}/${capacity}); rejected job ${job.id}`);
+    this.name = 'QueueFullError';
+  }
 }
 ```
+
+**Runtime guard (Opus MEDIUM):** ResultFor<TType> is compile-only. Worker may
+mis-route (bug). pool.ts dispatch() MUST validate `result.type === job.type`
+on receipt before resolving the Promise. Mismatch = throw with diagnostic
+(unreachable in correct code, prevents silent corruption).
 
 **Cancellation protocol (REPLACES vague "main-side ID tracking" of rev 1):**
 
@@ -232,11 +310,23 @@ export class WorkerPool {
 4. Edge: cancel arrives after worker already posted result → main sees result first,
    ignores subsequent cancel ack.
 
-**Queue backpressure:**
-- `maxQueueDepth = 2 × poolSize` (default 8).
-- Dispatch when queue full → reject immediately with `{ ok: false, errorName: 'QueueFullError' }`.
-- Caller (chunks.ts) treats as soft fail — chunk re-requested on next `updateVisibility`
-  frame if still visible.
+**Queue backpressure (rev 3 — explicit retry contract):**
+- `maxQueueDepth = 2 × poolSize` (default 8) for production. **Bench scenario 4
+  ("1000 decode jobs back-to-back") uses larger queue (`maxQueueDepth: 2048`) via
+  `?queue=N` URL param OR batched dispatch (50 at a time, await ack between batches).**
+  Otherwise the bench would trip QueueFullError immediately and measure rejection
+  throughput, not worker latency.
+- Dispatch when queue full → `dispatch()` throws `QueueFullError` synchronously
+  (before returning Promise — caller can `try/catch` directly without awaiting).
+- chunks.ts catch behavior: log warn + return rejected Promise to upstream caller.
+  meshHexLayer's `fetchAndMount` (src/render/meshHexLayer.ts:262) catches
+  AbortError; we extend that catch to include QueueFullError → mark chunk as
+  retry-on-next-cull. Add to `meshHexLayer.updateVisibility` (~line 392) a
+  retry queue: chunks rejected last frame are re-attempted before fresh visibility
+  query. This guarantees no static-load gap from QueueFullError.
+- Codex finding addressed: meshHexLayer didn't auto-retry; rev 3 adds
+  `retryNextCull: Set<string>` populated by catch path, drained at start of
+  next `updateVisibility`.
 
 ### D. Transferable buffer ownership (precise shape)
 
@@ -325,14 +415,27 @@ on spawn. Pool waits for ready before dispatching. If worker reports
 `supportsDecompressionStream: false`, pool falls back to main-thread decode for THAT
 session and logs warning.
 
-**Switch matrix:**
+**Switch matrix (rev 3 — DecompressionStream is hard baseline):**
+
+DecompressionStream is REQUIRED by both worker and main-thread decode paths
+(see chunks.ts:92 `pipeThrough(new DecompressionStream('gzip'))`). There is
+NO non-DS decode path planned. Therefore "worker missing DS → main fallback"
+is misleading — main also can't decode. Lock as project-wide hard browser
+baseline:
+
+> **Browser baseline:** DecompressionStream support is REQUIRED. iOS Safari
+> 16.4+ ships it; older versions fall through to the boot fatal-error
+> handler in main.ts (existing behavior). Phase 8 does NOT introduce a
+> non-DS decode path; that's a separate gzip-pure-JS bundle decision out of scope.
+
 | Condition | Decode path |
 |---|---|
-| Default | Worker pool |
-| `?worker=off` URL param | Main thread (Phase 7.9 path) |
-| `typeof Worker === undefined` | Main thread |
-| Worker `ready` reports no DecompressionStream | Main thread |
-| `?worker=on` explicit + module supports | Worker pool |
+| Default (DS supported, Worker supported) | Worker pool |
+| `?worker=off` URL param + DS supported | Main thread (Phase 7.9 path) |
+| `typeof Worker === undefined` | Main thread (DS-only env, e.g. older Safari with patches) |
+| `typeof DecompressionStream === undefined` (anywhere) | **Boot fails** — surfaced by existing main.ts catch (line 256) |
+| Worker `ready` reports no DecompressionStream (rare: worker-only-feature gap) | Main thread for THAT session + warn (worker-side support gap implies platform inconsistency) |
+| `?worker=on` explicit + DS + Worker | Worker pool |
 
 **Coexistence with `?engine`:** `?worker` controls **decode path** (worker vs main-thread).
 `?engine` controls **render path** (mesh vs particles, Phase 7 default mesh). Both
@@ -373,11 +476,14 @@ const workerUrl = new URL('../workers/decoder.worker.ts', import.meta.url);
 const worker = new Worker(workerUrl, { type: 'module' });
 ```
 
-**`vite.config.ts` REQUIRED additions:**
+**`vite.config.ts` REQUIRED additions (rev 3 note — file currently has NO `worker` block):**
+
+Verified: current `vite.config.ts` has 0 occurrences of "worker". Add the entire
+`worker: {}` as a NEW top-level key (alongside existing `plugins`, `build`, etc.).
 
 ```ts
 export default defineConfig({
-  // ...existing
+  // ...existing plugins, build, etc.
   worker: {
     format: 'es',                    // ESM worker output (browser-modern)
     rollupOptions: {
@@ -388,6 +494,11 @@ export default defineConfig({
   },
 });
 ```
+
+**File extension caveat:** `new URL('./decoder.worker.ts', import.meta.url)` uses
+the `.ts` extension. Vite worker plugin rewrites this at build time. Do NOT use
+`.js` thinking it should match build output — dev breaks (.js file doesn't exist
+in src/).
 
 **Constraints (failure modes documented):**
 1. Worker entry MUST NOT import from `pixi.js` or `pixi-viewport` (would bloat worker
