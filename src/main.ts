@@ -6,7 +6,13 @@
  * Phase 3: viewport + hex layer + initial render.
  */
 import { createStage, mountStage } from './render/stage';
-import { createViewport, fitViewportToWorld, resizeViewport } from './render/viewport';
+import {
+  createViewport,
+  fitViewportToWorld,
+  resizeViewport,
+  enableXPanClamp,
+  disableXPanClamp,
+} from './render/viewport';
 import { createHexLayer } from './render/hexLayer';
 import { loadManifest } from './data/manifest';
 import { loadCountries } from './data/countries';
@@ -37,10 +43,18 @@ async function bootstrap(): Promise<void> {
   const lut = buildColorLut(countries.countries);
   const availableTiers = new Set(Object.keys(manifest.tiles));
 
+  // Coarse tier wraps; fine tier (10km) needs clamp để tránh empty edge.
+  const TIERS_WITH_WRAP: ReadonlySet<string> = new Set(['50km', '25km']);
+  const applyPanClampForTier = (tierName: string): void => {
+    if (TIERS_WITH_WRAP.has(tierName)) disableXPanClamp(viewport);
+    else enableXPanClamp(viewport);
+  };
+
   // Initial: load coarsest tier for instant world view
   const initialTier = pickTier(1, availableTiers);
   const tier = await loadTier(initialTier);
   hexLayer.setTier(tier, lut);
+  applyPanClampForTier(initialTier);
 
   fitViewportToWorld(viewport, app);
 
@@ -113,6 +127,7 @@ async function bootstrap(): Promise<void> {
           const td = await loadTier(next);
           currentTier = next;
           hexLayer.setTier(td, lut);
+          applyPanClampForTier(currentTier);
           w.__mwTier = currentTier;
           w.__mwHexCount = td.hexes.length;
           console.info(`[lod] → ${next} at zoom ${viewport.scale.x.toFixed(2)}`);

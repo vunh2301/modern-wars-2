@@ -26,15 +26,10 @@ export function createViewport(app: Application): Viewport {
     .pinch()
     .wheel()
     .decelerate({ friction: 0.93 })
-    .clampZoom({ minScale: 0.20, maxScale: 8 })
-    // Justin 2026-04-26 "zoom in mất bên phải": clamp pan với explicit
-    // left/right để khớp hex content range [-W/2, +W/2] (default clamp
-    // assume [0, W] block pan trái).
-    .clamp({
-      left: -WRAP_DISTANCE_PX / 2,
-      right: WRAP_DISTANCE_PX / 2,
-      underflow: 'center',
-    });
+    .clampZoom({ minScale: 0.20, maxScale: 8 });
+  // Pan clamp dynamic per-tier (xem main.ts setPanClampForTier):
+  // coarse tier có wrap copies → no clamp (user pan freely past seam);
+  // 10km tier no wrap → clamp ±W/2 để tránh empty edge.
 
   return viewport;
 }
@@ -64,4 +59,22 @@ export function fitViewportToWorld(viewport: Viewport, app: Application): void {
 export function resizeViewport(app: Application, viewport: Viewport): void {
   const bounds = worldBoundsPx();
   viewport.resize(app.screen.width, app.screen.height, bounds.width, bounds.height);
+}
+
+/**
+ * Bật clamp pan để giới hạn viewport.center.x ∈ [-W/2, +W/2]. Dùng cho fine
+ * tier không có wrap copies (10km) — tránh user pan vào vùng empty.
+ * direction: 'x' chỉ clamp X, để Y free.
+ */
+export function enableXPanClamp(viewport: Viewport): void {
+  viewport.clamp({
+    left: -WRAP_DISTANCE_PX / 2,
+    right: WRAP_DISTANCE_PX / 2,
+    direction: 'x',
+  });
+}
+
+/** Tắt clamp pan — dùng cho coarse tier có wrap copies (50km/25km). */
+export function disableXPanClamp(viewport: Viewport): void {
+  viewport.plugins.remove('clamp');
 }

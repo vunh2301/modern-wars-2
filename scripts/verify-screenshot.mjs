@@ -116,14 +116,23 @@ await new Promise((r) => setTimeout(r, 2000));
 await page.screenshot({ path: `${OUT}/12-pan-left-180.png` });
 console.log('  → 12-pan-left-180.png (lng -180° / clamp test)');
 
-// Zoom 8× pan to right edge (test no empty visible at 10km tier).
+// Zoom 8× pan tới Russia far East (Cape Dezhnev ~169°E 66°N, có đất gần edge).
 await page.evaluate(() => {
   window.__mwSetZoom?.(8);
-  window.__mwCenterOn?.(180, 0);
+  window.__mwCenterOn?.(170, 65);
 });
 await new Promise((r) => setTimeout(r, 4000));
-await page.screenshot({ path: `${OUT}/13-zoom8-right-edge.png` });
-console.log('  → 13-zoom8-right-edge.png (lng 180° zoom 8× / 10km tier no-empty test)');
+await page.screenshot({ path: `${OUT}/13-zoom8-far-east.png` });
+console.log('  → 13-zoom8-far-east.png (Russia FE 170°E 65°N zoom 8× / 10km clamp test)');
+
+// Test Y pan free (zoom 1, pan vertically to Greenland).
+await page.evaluate(() => {
+  window.__mwSetZoom?.(1);
+  window.__mwCenterOn?.(-40, 75);
+});
+await new Promise((r) => setTimeout(r, 3000));
+await page.screenshot({ path: `${OUT}/14-y-pan-greenland.png` });
+console.log('  → 14-y-pan-greenland.png (Greenland test Y pan free)');
 
 console.log('\n=== LOGS ===');
 for (const l of logs) console.log(l);
