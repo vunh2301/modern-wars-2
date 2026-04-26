@@ -37,6 +37,7 @@ import {
   type ChunkManifestEntry,
   type ChunksManifest,
 } from '../data/chunks';
+import { QueueFullError } from '../workers/pool';
 import { kmToWorldPx, WRAP_DISTANCE_PX } from '../geo/projection';
 import { createHexShader } from './hexShader';
 
@@ -83,6 +84,8 @@ export interface MeshHexLayer {
   getStats(): MeshHexLayerStats;
   /** Phase 7.9: best-effort warm cache for adjacent tier (idle-paced fetch). */
   prefetchTier(tierName: string, signal?: AbortSignal): Promise<void>;
+  /** Phase 8.3: wire cullNow reference for static-viewport rAF retry driver. */
+  setCullNow(fn: () => void): void;
   destroy(): void;
 }
 
@@ -133,6 +136,16 @@ export function createMeshHexLayer(app: Application): MeshHexLayer {
   const inFlightByCache = new Map<string, Promise<ChunkBuffers>>();
   let visibleSet = new Set<string>();
   const builtOrder: string[] = [];
+
+  // Phase 8.3: QueueFullError retry support.
+  // Keys that failed with QueueFullError — re-attempted on next cullNow().
+  // Bounded: ≤ visible chunk count (capped ≤ MAX_BUILT_INSTANCES per Phase 7.9 baseline).
+  const retryNextCull = new Set<string>();
+  // Guard: at most one rAF in-flight for static-viewport drain.
+  let retryRafScheduled = false;
+  // Callable reference to cullNow — set by the layer consumer (main.ts).
+  // Used to schedule rAF retry when viewport is static (no 'moved'/'zoomed' events).
+  let cullNowRef: (() => void) | null = null;
 
   // BLOCKER fix: Pixi v8 Mesh.destroy({children:true}) does NOT cascade to
   // Geometry/Buffer destroy. Codex review found leaking GPU buffers across
@@ -315,6 +328,22 @@ export function createMeshHexLayer(app: Application): MeshHexLayer {
         inFlight.delete(key);
         stats.inFlight = inFlight.size;
         if (err instanceof DOMException && err.name === 'AbortError') return;
+        if (err instanceof QueueFullError) {
+          // Worker pool queue full — schedule retry on next cull.
+          // Static-viewport rAF driver: if this is the first retry key added
+          // (Set was empty), schedule a one-shot rAF to drive the drain.
+          // This handles static viewports where no 'moved'/'zoomed' events fire.
+          const wasEmpty = retryNextCull.size === 0;
+          retryNextCull.add(key);
+          if (wasEmpty && !retryRafScheduled && cullNowRef) {
+            retryRafScheduled = true;
+            requestAnimationFrame(() => {
+              retryRafScheduled = false;
+              cullNowRef?.();
+            });
+          }
+          return;
+        }
         console.warn(`[mesh-hex] chunk ${key} (${cacheKey}) load failed`, err);
       });
   };
@@ -396,6 +425,29 @@ export function createMeshHexLayer(app: Application): MeshHexLayer {
     if (!currentTierName) return;
     const t0 = performance.now();
     performance.mark('cull-query-start');
+
+    // Phase 8.3: drain QueueFullError retry set.
+    // Re-attempt chunks that failed with QueueFullError last cull.
+    // retryNextCull is cleared before issuing new fetches so that
+    // a second QueueFullError re-adds the key cleanly.
+    if (retryNextCull.size > 0) {
+      const retryKeys = Array.from(retryNextCull);
+      retryNextCull.clear();
+      for (const retryKey of retryKeys) {
+        // Find the rbush entry for this key to get entry + offsetX.
+        // Key format: `${chunkId}@${offsetX}` — parse offsetX.
+        const atIdx = retryKey.lastIndexOf('@');
+        if (atIdx < 0) continue;
+        const offsetX = parseFloat(retryKey.slice(atIdx + 1));
+        // Re-issue fetch (inFlight guard prevents duplicates).
+        // rbush lookup by scanning current tier entries.
+        const allEntries = rbush.all();
+        const rbEntry = allEntries.find((e) => e.key === retryKey);
+        if (rbEntry && visibleSet.has(retryKey)) {
+          fetchAndMount(retryKey, rbEntry.manifestEntry, offsetX);
+        }
+      }
+    }
 
     // Hotfix: compute wrapShift = nearest multiple of W to viewport center.
     // Then normalize bbox into canonical range for rbush query, and shift
@@ -532,10 +584,16 @@ export function createMeshHexLayer(app: Application): MeshHexLayer {
     bordersByKey.clear();
     clearOldTier(); // Phase 7.9 (A): sweep graveyard on layer destroy.
     inFlightByCache.clear();
+    retryNextCull.clear();
     chunkCache.clear();
     shader.destroy();
     root.destroy({ children: true });
   };
 
-  return { root, setTier, setBordersVisible, updateVisibility, getStats, prefetchTier, destroy };
+  // Phase 8.3: wire cullNow reference for static-viewport rAF retry driver.
+  const setCullNow = (fn: () => void): void => {
+    cullNowRef = fn;
+  };
+
+  return { root, setTier, setBordersVisible, updateVisibility, getStats, prefetchTier, setCullNow, destroy };
 }

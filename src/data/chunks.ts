@@ -1,27 +1,45 @@
 /**
- * Phase 7.2 chunk loader. Reads MWCK v2 (instanced) binary (gzipped) from
- * /public/data/chunks/{tier}/c-{col}-{row}.{hash}.bin and exposes zero-copy
- * views suitable for Pixi v8 Geometry attribute buffers (instanced mode).
+ * Phase 8.3 chunk loader. Reads MWCK v2 (instanced) binary (gzipped) from
+ * /public/data/chunks/{tier}/c-{col}-{row}.{hash}.bin.
  *
- * Phase 7 Iter 2: Format v2 = template + instances + shared index, ~10×
- * smaller than v1 (per-vertex packed).
+ * Phase 8: delegates to WorkerPool (default) or main-thread fallback (?worker=off).
+ * Public API unchanged: loadChunk(entry, signal?) returns Promise<ChunkBuffers>.
+ * AbortError semantics preserved: signal abort → pool.cancel → promise rejects.
  *
- * AbortController per fetch — see arch § 8.5.
+ * Decode path selection (module init, runs once):
+ *   ?worker=off              → main-thread (Phase 7.9 path via decoder.ts)
+ *   typeof Worker undefined  → main-thread (non-DOM env, e.g. Vitest)
+ *   default                  → WorkerPool (decoder.worker.ts)
+ *
+ * ?worker and ?engine are orthogonal URL params:
+ *   ?worker controls decode path (worker vs main-thread)
+ *   ?engine controls render path (mesh vs particles, Phase 7 default mesh)
+ *
+ * Worker memory note: performance.memory reports main thread heap only.
+ * Worker heap is invisible. Total process peak = main + Σ(worker heaps).
  */
+
+import { loadAndParse, parseChunkBinary as _parseChunkBinary } from '../workers/decoder';
+import type { DecoderManifestEntry } from '../workers/decoder';
+import { WorkerPool, QueueFullError } from '../workers/pool';
+import type { DecodeChunkResult } from '../workers/types';
 
 const HEADER_SIZE = 16;
 const TEMPLATE_BYTES = 48;
 const INDEX_BYTES = 48;
 const FOOTER_SIZE = 32;
 
+// Re-export constants so existing callers (tests, bake scripts) keep working.
+export { HEADER_SIZE, TEMPLATE_BYTES, INDEX_BYTES, FOOTER_SIZE };
+
 export interface ChunkBuffers {
-  /** 6 hex template vertices × (x:f32, y:f32) pre-scaled. Zero-copy view over the decompressed source buffer. */
+  /** 6 hex template vertices × (x:f32, y:f32) pre-scaled. Each is an independent ArrayBuffer via .slice(). */
   templateBuffer: Uint8Array;
-  /** Per-hex instance attrs: (cx:f32, cy:f32, RGBA:u8×4) interleaved. Zero-copy view. */
+  /** Per-hex instance attrs: (cx:f32, cy:f32, RGBA:u8×4) interleaved. */
   instanceBuffer: Uint8Array;
-  /** Static index buffer (12 uint32 fan triangulation). Zero-copy view. */
+  /** Static index buffer (12 uint32 fan triangulation). */
   indexBuffer: Uint32Array;
-  /** Edge segments [x1, y1, x2, y2, …] (edge_count × 4 floats). Zero-copy view. */
+  /** Edge segments [x1, y1, x2, y2, …] (edge_count × 4 floats). */
   edgeBuffer: Float32Array;
   hexCount: number;
   edgeCount: number;
@@ -58,6 +76,39 @@ export interface ChunksManifest {
   tiers: Record<string, ChunkTierManifest>;
 }
 
+// ─── Worker detection (module init — runs once) ───────────────────────────────
+
+// Guard typeof globalThis.location for non-DOM contexts (Vitest/Node).
+const supportsWorker =
+  typeof Worker !== 'undefined' && typeof globalThis.location !== 'undefined';
+const supportsDecompressionStream = typeof DecompressionStream !== 'undefined';
+
+const urlOptOut = (() => {
+  if (typeof globalThis.location === 'undefined') return false;
+  return new URLSearchParams(globalThis.location.search).get('worker') === 'off';
+})();
+
+const useWorker = supportsWorker && supportsDecompressionStream && !urlOptOut;
+
+// Pool size from ?workers=N URL param (default 4).
+const workerPoolSize = (() => {
+  if (typeof globalThis.location === 'undefined') return 4;
+  const n = parseInt(new URLSearchParams(globalThis.location.search).get('workers') ?? '', 10);
+  return Number.isFinite(n) && n > 0 ? n : 4;
+})();
+
+// Singleton pool (lazy init on first dispatch).
+let pool: WorkerPool | null = null;
+
+function getPool(): WorkerPool {
+  if (!pool) {
+    pool = new WorkerPool({ size: workerPoolSize });
+  }
+  return pool;
+}
+
+// ─── Manifest loader ──────────────────────────────────────────────────────────
+
 let manifestPromise: Promise<ChunksManifest> | null = null;
 
 /** Loads /data/chunks/manifest.json once, memoized. */
@@ -75,33 +126,26 @@ export async function loadChunksManifest(): Promise<ChunksManifest> {
   return manifestPromise;
 }
 
-/**
- * Fetch + decompress + parse one chunk. Pure function — caller owns caching.
- *
- * Pass an AbortSignal to cancel mid-flight fetch (e.g., on tier switch).
- */
-export async function loadChunk(
-  entry: ChunkManifestEntry,
-  signal?: AbortSignal,
-): Promise<ChunkBuffers> {
-  const res = await fetch(`/data/${entry.file}`, { credentials: 'omit', signal });
-  if (!res.ok) throw new Error(`chunk fetch ${res.status} ${entry.file}`);
-  if (!res.body) throw new Error(`chunk body missing ${entry.file}`);
+// ─── parseChunkBinary (re-export for backward compat) ────────────────────────
 
-  // Browser-native gzip decompression.
-  const stream = res.body.pipeThrough(new DecompressionStream('gzip'));
-  const arrayBuffer = await new Response(stream).arrayBuffer();
-  return parseChunkBinary(arrayBuffer, entry);
+/**
+ * Re-export parseChunkBinary from decoder.ts for backward compatibility.
+ * ChunkManifestEntry and DecoderManifestEntry have identical shapes — safe cast.
+ */
+export function parseChunkBinary(
+  buf: ArrayBuffer,
+  entry: ChunkManifestEntry,
+): ChunkBuffers {
+  return _parseChunkBinary(buf, entry as DecoderManifestEntry);
 }
 
+// ─── Color LUT hash ───────────────────────────────────────────────────────────
+
 /**
- * Codex-review LOW fix: SHA-256 hash of color LUT bytes (first 12 hex chars)
- * for runtime mismatch detection vs `chunkManifest.colorLutHash`. Same algo
- * as `scripts/bake-chunks.ts::lutHash`. Async because Web Crypto API.
+ * SHA-256 hash of color LUT bytes (first 12 hex chars) for runtime
+ * mismatch detection vs chunkManifest.colorLutHash.
  */
 export async function computeColorLutHash(lut: Uint32Array): Promise<string> {
-  // Copy to fresh ArrayBuffer to satisfy Web Crypto BufferSource type
-  // (input lut.buffer may be ArrayBufferLike incl. SharedArrayBuffer).
   const bytes = new Uint8Array(lut.byteLength);
   bytes.set(new Uint8Array(lut.buffer, lut.byteOffset, lut.byteLength));
   const digest = await crypto.subtle.digest('SHA-256', bytes);
@@ -111,83 +155,77 @@ export async function computeColorLutHash(lut: Uint32Array): Promise<string> {
   return hex.slice(0, 12);
 }
 
-/** Parse MWCK v2 binary buffer → typed views. Throws on format error. */
-export function parseChunkBinary(buf: ArrayBuffer, entry: ChunkManifestEntry): ChunkBuffers {
-  const view = new DataView(buf);
+// ─── loadChunk — public API (signature unchanged) ─────────────────────────────
 
-  // Header
-  const magic =
-    String.fromCharCode(view.getUint8(0)) +
-    String.fromCharCode(view.getUint8(1)) +
-    String.fromCharCode(view.getUint8(2)) +
-    String.fromCharCode(view.getUint8(3));
-  if (magic !== 'MWCK') throw new Error(`${entry.file}: bad magic ${magic}`);
-  const version = view.getUint32(4, true);
-  if (version !== 2) throw new Error(`${entry.file}: unsupported version ${version} (expected 2)`);
-  const tierSizeKm = view.getUint16(8, true);
-  const col = view.getUint8(10);
-  const row = view.getUint8(11);
-  const hexCount = view.getUint32(12, true);
-  if (hexCount !== entry.hexCount) {
-    throw new Error(`${entry.file}: hexCount ${hexCount} ≠ manifest ${entry.hexCount}`);
+/**
+ * Fetch + decompress + parse one chunk. Public API unchanged from Phase 7.9.
+ *
+ * Phase 8: delegates to WorkerPool by default (?worker=on or absent).
+ * Falls back to main-thread decoder.ts when:
+ *   - ?worker=off URL param
+ *   - typeof Worker === undefined (non-DOM / Vitest)
+ *
+ * AbortSignal: meshHexLayer passes signal from abortController.
+ * Pool cancel wired via signal.addEventListener('abort').
+ */
+export async function loadChunk(
+  entry: ChunkManifestEntry,
+  signal?: AbortSignal,
+): Promise<ChunkBuffers> {
+  if (!useWorker) {
+    // Main-thread fallback (Phase 7.9 path via decoder.ts).
+    return loadAndParse(entry as DecoderManifestEntry, signal);
   }
 
-  // Phase 7.8 fix: Pixi v8 WebGPU fastCopy assumes `buffer.data.buffer` matches
-  // descriptor.size. Zero-copy views vào underlying `buf` cause RangeError
-  // ("Invalid typed array length: N") khi destination GPUBuffer chỉ rộng bằng
-  // view nhưng fastCopy tính `lengthDouble = underlying.byteLength / 8`.
-  // Per-attribute fresh ArrayBuffer (TypedArray.slice() = copy + new backing).
+  // Worker path — delegate to pool.
+  const id = `chunk-${entry.id}-${Math.random().toString(36).slice(2)}`;
+  const p = getPool();
 
-  // Template (48 B): 6 verts × (x:f32, y:f32) pre-scaled
-  const templateOffset = HEADER_SIZE;
-  const templateBuffer = new Uint8Array(buf, templateOffset, TEMPLATE_BYTES).slice();
-
-  // Instance buffer (hex_count × 12 B)
-  const instanceOffset = templateOffset + TEMPLATE_BYTES;
-  const instanceBytes = hexCount * 12;
-  const instanceBuffer = new Uint8Array(buf, instanceOffset, instanceBytes).slice();
-
-  // Static index (48 B = 12 uint32, shared fan triangulation)
-  const indexOffset = instanceOffset + instanceBytes;
-  const indexBuffer = new Uint32Array(buf, indexOffset, INDEX_BYTES / 4).slice();
-
-  // Edge prefix + edges
-  const edgePrefixOffset = indexOffset + INDEX_BYTES;
-  const edgeCount = view.getUint32(edgePrefixOffset, true);
-  const edgeOffset = edgePrefixOffset + 4;
-  const edgeBytes = edgeCount * 16;
-  const edgeBuffer = new Float32Array(buf, edgeOffset, edgeBytes / 4).slice();
-
-  // Footer
-  const footerOffset = edgeOffset + edgeBytes;
-  const minX = view.getFloat32(footerOffset, true);
-  const minY = view.getFloat32(footerOffset + 4, true);
-  const maxX = view.getFloat32(footerOffset + 8, true);
-  const maxY = view.getFloat32(footerOffset + 12, true);
-  const cx = view.getFloat32(footerOffset + 16, true);
-  const cy = view.getFloat32(footerOffset + 20, true);
-
-  const expectedTotal = footerOffset + FOOTER_SIZE;
-  if (expectedTotal !== buf.byteLength) {
-    throw new Error(
-      `${entry.file}: size mismatch — expected ${expectedTotal}, got ${buf.byteLength}`,
-    );
+  // Wire AbortSignal to cancel (one-shot: once aborted, stays aborted).
+  if (signal) {
+    signal.addEventListener('abort', () => p.cancel(id), { once: true });
   }
 
+  let result: DecodeChunkResult;
+  try {
+    result = await p.dispatch({ type: 'decode-chunk', id, entry, tier: entry.id });
+  } catch (err) {
+    if (err instanceof QueueFullError) {
+      // Queue full — re-throw so meshHexLayer can add to retryNextCull.
+      throw err;
+    }
+    throw err;
+  }
+
+  if (!result.ok) {
+    // Re-raise error with correct name so AbortError is caught by meshHexLayer.
+    const error = new Error(result.error);
+    error.name = result.errorName;
+    // Wrap AbortError as DOMException to match Phase 7.9 semantics.
+    if (result.errorName === 'AbortError') {
+      throw new DOMException(result.error, 'AbortError');
+    }
+    throw error;
+  }
+
+  // Reconstruct ChunkBuffers from transferred ArrayBuffers.
+  // Each buffer was transferred zero-copy from worker; wrap in typed views.
   return {
-    templateBuffer,
-    instanceBuffer,
-    indexBuffer,
-    edgeBuffer,
-    hexCount,
-    edgeCount,
-    bbox: { minX, minY, maxX, maxY },
-    centroid: { x: cx, y: cy },
-    tierSizeKm,
-    col,
-    row,
+    templateBuffer: new Uint8Array(result.templateBuffer),
+    instanceBuffer: new Uint8Array(result.instanceBuffer),
+    indexBuffer: new Uint32Array(result.indexBuffer),
+    edgeBuffer: new Float32Array(result.edgeBuffer),
+    hexCount: result.hexCount,
+    edgeCount: result.edgeCount,
+    bbox: result.bbox,
+    centroid: result.centroid,
+    tierSizeKm: result.tierSizeKm,
+    col: result.col,
+    row: result.row,
   };
 }
+
+// ─── ChunkCache ───────────────────────────────────────────────────────────────
 
 /**
  * LRU cache for decoded ChunkBuffers. Insertion-order Map; on `get` the
@@ -229,4 +267,21 @@ export class ChunkCache {
   get size(): number {
     return this.map.size;
   }
+}
+
+// ─── Worker pool accessor (for HUD/bench) ────────────────────────────────────
+
+/** Returns current worker pool stats (or null if pool not yet initialized). */
+export function getWorkerPoolStats(): ReturnType<WorkerPool['stats']> | null {
+  return pool ? pool.stats() : null;
+}
+
+/** Returns current decode mode for HUD display. */
+export function getDecodeMode(): 'worker' | 'main' {
+  return useWorker ? 'worker' : 'main';
+}
+
+/** Returns configured pool size. */
+export function getWorkerPoolSize(): number {
+  return workerPoolSize;
 }

@@ -47,6 +47,8 @@ interface UnifiedHexLayer {
   getStats(): { visibleChunks: number; builtChunks: number; totalChunks: number; lastBuildMs: number; lastCullMs: number; lastTierSwitchMs: number };
   /** Phase 7.9 (C): warm adjacent tier cache (mesh engine only; particles no-op). */
   prefetchTier?: (tierName: string, signal?: AbortSignal) => Promise<void>;
+  /** Phase 8.3: wire cullNow for static-viewport QueueFullError retry rAF driver. */
+  setCullNow?: (fn: () => void) => void;
   destroy(): void;
 }
 
@@ -175,6 +177,8 @@ async function bootstrap(): Promise<void> {
     });
   };
   const updateVisibleChunks = throttleRaf(cullNow);
+  // Phase 8.3: wire cullNow for static-viewport QueueFullError retry rAF driver.
+  hexLayer.setCullNow?.(cullNow);
   cullNow();
 
   // Resize handler
