@@ -20,7 +20,7 @@ import { createBenchmark } from './render/benchmark';
 import { loadManifest } from './data/manifest';
 import { loadCountries } from './data/countries';
 import { loadTier } from './data/tiers';
-import { loadChunksManifest, computeColorLutHash } from './data/chunks';
+import { loadChunksManifest, computeColorLutHash, getWorkerPoolStats, getDecodeMode, getWorkerPoolSize } from './data/chunks';
 import { buildColorLut } from './render/colors';
 import { pickTier } from './render/lod';
 
@@ -47,6 +47,10 @@ interface UnifiedHexLayer {
   getStats(): { visibleChunks: number; builtChunks: number; totalChunks: number; lastBuildMs: number; lastCullMs: number; lastTierSwitchMs: number };
   /** Phase 7.9 (C): warm adjacent tier cache (mesh engine only; particles no-op). */
   prefetchTier?: (tierName: string, signal?: AbortSignal) => Promise<void>;
+  /** Phase 8.3: wire cullNow for static-viewport QueueFullError retry rAF driver. */
+  setCullNow?: (fn: () => void) => void;
+  /** Phase 8 H3: cold-cache worker stress (mesh engine only). */
+  forceWorkerStress?: (jobCount: number) => Promise<{ latencies: number[]; failedCount: number }>;
   destroy(): void;
 }
 
@@ -175,6 +179,8 @@ async function bootstrap(): Promise<void> {
     });
   };
   const updateVisibleChunks = throttleRaf(cullNow);
+  // Phase 8.3: wire cullNow for static-viewport QueueFullError retry rAF driver.
+  hexLayer.setCullNow?.(cullNow);
   cullNow();
 
   // Resize handler
@@ -230,6 +236,11 @@ async function bootstrap(): Promise<void> {
   w.__mwHexLayer = hexLayer;
   w.__mwBenchmark = (): unknown => benchmark.snapshot();
   w.__mwBenchReset = (): void => benchmark.reset();
+  // Phase 8 H3 cold-cache stress hook for bench scenario 4. Awaits jobCount
+  // loadChunk dispatches against the worker pool and returns { latencies, failedCount }.
+  // Particles engine doesn't expose forceWorkerStress → returns empty result.
+  w.__mwForceWorkerStress = (jobCount: number): Promise<{ latencies: number[]; failedCount: number }> =>
+    hexLayer.forceWorkerStress?.(jobCount) ?? Promise.resolve({ latencies: [], failedCount: 0 });
 
   const updateHud = (): void => {
     w.__mwZoom = viewport.scale.x;
@@ -412,7 +423,17 @@ queueMicrotask(() => {
         `build: ${stats.lastBuildMs.toFixed(1)}ms | cull: ${stats.lastCullMs.toFixed(1)}ms | switch: ${stats.lastTierSwitchMs.toFixed(1)}ms`
       : '';
 
-    hud.textContent = [line1, memStr, chunkStr].filter(Boolean).join('\n');
+    // Phase 8: worker pool stats line.
+    // NOTE: performance.memory = main thread only. Worker heap excluded.
+    // Total process memory = main + Σ(worker heaps). Use DevTools for full view.
+    const poolStats = getWorkerPoolStats();
+    const decodeMode = getDecodeMode();
+    const poolSize = getWorkerPoolSize();
+    const workerStr = decodeMode === 'worker' && poolStats
+      ? `decode: worker(${poolSize}) | active: ${poolStats.activeJobs} | queue: ${poolStats.queueDepth} | post p95: ${poolStats.p95LatencyMs.toFixed(1)}ms`
+      : `decode: main`;
+
+    hud.textContent = [line1, memStr, chunkStr, workerStr].filter(Boolean).join('\n');
 
     // Color-code: red khi memory peak > 250MB target (Justin 2026-04-26).
     if (memNowMb !== null && memPeakMb > 250) {

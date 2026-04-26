@@ -146,7 +146,10 @@ describe('parseChunkBinary', () => {
     expect(parsed.edgeBuffer.length).toBe(E * 4);
   });
 
-  test('zero-copy: returned views share underlying ArrayBuffer with input', () => {
+  test('transferable: returned views have independent ArrayBuffer backing (Phase 8 .slice())', () => {
+    // Phase 8: parseChunkBinary uses .slice() on each TypedArray so buffers are
+    // independently owned and safe to transfer via postMessage(). They must NOT
+    // share the input ArrayBuffer.
     const buf = buildSyntheticChunk({
       hexCount: 2,
       edgeCount: 1,
@@ -157,10 +160,14 @@ describe('parseChunkBinary', () => {
       centroid: [0, 0],
     });
     const parsed = parseChunkBinary(buf, fakeEntry(2, 1, 0, 0));
-    expect(parsed.templateBuffer.buffer).toBe(buf);
-    expect(parsed.instanceBuffer.buffer).toBe(buf);
-    expect(parsed.indexBuffer.buffer).toBe(buf);
-    expect(parsed.edgeBuffer.buffer).toBe(buf);
+    expect(parsed.templateBuffer.buffer).not.toBe(buf);
+    expect(parsed.instanceBuffer.buffer).not.toBe(buf);
+    expect(parsed.indexBuffer.buffer).not.toBe(buf);
+    expect(parsed.edgeBuffer.buffer).not.toBe(buf);
+    // Correct data must still be present (sizes match the 2-hex, 1-edge chunk).
+    expect(parsed.templateBuffer.byteLength).toBeGreaterThan(0);
+    expect(parsed.instanceBuffer.byteLength).toBe(2 * 12);
+    expect(parsed.edgeBuffer.byteLength).toBeGreaterThan(0);
   });
 
   test('rejects bad magic', () => {

@@ -1,13 +1,19 @@
 /**
- * Phase 6 benchmark instrumentation.
+ * Phase 6 + Phase 8 benchmark instrumentation.
  *
  * Collects per-frame FPS samples + per-build chunk durations + tier-switch
- * times. Snapshots aggregated stats via window.__mwBenchmark().
+ * times + Phase 8 worker pool metrics. Snapshots via window.__mwBenchmark().
  *
  * Memory API: Chrome-only `performance.memory` (deprecated but functional).
  * Returns 0 on unsupported browsers (Safari, Firefox).
+ *
+ * IMPORTANT — worker memory caveat:
+ * performance.memory reports MAIN THREAD HEAP ONLY. Worker heaps are invisible.
+ * Total process memory = main heap + Σ(worker heaps) + GPU buffers + OS overhead.
+ * For full measurement: DevTools Performance > Memory tab (includes worker heaps).
  */
 import type { Application } from 'pixi.js';
+import { getWorkerPoolStats, getDecodeMode, getWorkerPoolSize } from '../data/chunks';
 
 /** Common stats subset both HexLayer (Phase 6) and MeshHexLayer (Phase 7) expose. */
 interface StatsProvider {
@@ -25,6 +31,22 @@ export interface BenchmarkSnapshot {
   visibleChunks: { min: number; max: number; avg: number };
   memoryMb: number;
   samples: { fps: number; chunkBuild: number };
+  /** Phase 8 worker pool metrics.
+   *  NOTE: performance.memory = main thread only. Worker heap excluded.
+   *  For total process memory: DevTools Performance > Memory tab. */
+  worker: {
+    mode: 'worker' | 'main';
+    poolSize: number;
+    totalJobs: number;
+    avgLatencyMs: number;
+    p95LatencyMs: number;
+    activeJobs: number;
+    queueDepth: number;
+    queueFullRejects: number;
+    cancellations: number;
+    /** True after H2 fallback fires (worker missing DecompressionStream). */
+    degraded: boolean;
+  };
 }
 
 export interface Benchmark {
@@ -100,6 +122,21 @@ export function createBenchmark(app: Application, hexLayer: StatsProvider): Benc
       }
     } catch { /* unsupported browser */ }
 
+    // Phase 8: worker pool stats snapshot.
+    const poolStats = getWorkerPoolStats();
+    const workerStats: BenchmarkSnapshot['worker'] = {
+      mode: getDecodeMode(),
+      poolSize: getWorkerPoolSize(),
+      totalJobs: poolStats?.totalJobs ?? 0,
+      avgLatencyMs: poolStats?.avgLatencyMs ?? 0,
+      p95LatencyMs: poolStats?.p95LatencyMs ?? 0,
+      activeJobs: poolStats?.activeJobs ?? 0,
+      queueDepth: poolStats?.queueDepth ?? 0,
+      queueFullRejects: poolStats?.queueFullRejects ?? 0,
+      cancellations: poolStats?.cancellations ?? 0,
+      degraded: poolStats?.degraded ?? false,
+    };
+
     return {
       fps_p50: Math.round(percentile(fpsSorted, 0.50) * 10) / 10,
       fps_p95: Math.round(percentile(fpsSorted, 0.05) * 10) / 10, // p95 = 5th from low
@@ -119,6 +156,7 @@ export function createBenchmark(app: Application, hexLayer: StatsProvider): Benc
       },
       memoryMb,
       samples: { fps: fpsBuf.length, chunkBuild: chunkBuildBuf.length },
+      worker: workerStats,
     };
   };
 

@@ -37,6 +37,7 @@ import {
   type ChunkManifestEntry,
   type ChunksManifest,
 } from '../data/chunks';
+import { QueueFullError } from '../workers/pool';
 import { kmToWorldPx, WRAP_DISTANCE_PX } from '../geo/projection';
 import { createHexShader } from './hexShader';
 
@@ -83,6 +84,14 @@ export interface MeshHexLayer {
   getStats(): MeshHexLayerStats;
   /** Phase 7.9: best-effort warm cache for adjacent tier (idle-paced fetch). */
   prefetchTier(tierName: string, signal?: AbortSignal): Promise<void>;
+  /** Phase 8.3: wire cullNow reference for static-viewport rAF retry driver. */
+  setCullNow(fn: () => void): void;
+  /** Phase 8 H3 cold-cache stress: clear ChunkCache, dispatch N decode jobs
+   *  through the worker pool sequentially (or concurrently up to pool size).
+   *  Returns { latencies: number[], failedCount: number } where latencies are
+   *  per-job roundtrip ms and failedCount is the number of jobs that errored.
+   *  Used by bench scenario 4. */
+  forceWorkerStress(jobCount: number): Promise<{ latencies: number[]; failedCount: number }>;
   destroy(): void;
 }
 
@@ -133,6 +142,16 @@ export function createMeshHexLayer(app: Application): MeshHexLayer {
   const inFlightByCache = new Map<string, Promise<ChunkBuffers>>();
   let visibleSet = new Set<string>();
   const builtOrder: string[] = [];
+
+  // Phase 8.3: QueueFullError retry support.
+  // Keys that failed with QueueFullError — re-attempted on next cullNow().
+  // Bounded: ≤ visible chunk count (capped ≤ MAX_BUILT_INSTANCES per Phase 7.9 baseline).
+  const retryNextCull = new Set<string>();
+  // Guard: at most one rAF in-flight for static-viewport drain.
+  let retryRafScheduled = false;
+  // Callable reference to cullNow — set by the layer consumer (main.ts).
+  // Used to schedule rAF retry when viewport is static (no 'moved'/'zoomed' events).
+  let cullNowRef: (() => void) | null = null;
 
   // BLOCKER fix: Pixi v8 Mesh.destroy({children:true}) does NOT cascade to
   // Geometry/Buffer destroy. Codex review found leaking GPU buffers across
@@ -271,7 +290,7 @@ export function createMeshHexLayer(app: Application): MeshHexLayer {
     // Capture promise ref so finally() only deletes its OWN entry (not a
     // newer promise registered after this one was aborted+restarted under
     // rapid LOD churn — Codex re-review LOW fix).
-    const promise: Promise<ChunkBuffers> = loadChunk(entry, sig)
+    const promise: Promise<ChunkBuffers> = loadChunk(entry, sig, tierAtRequest)
       .then((buffers) => {
         if (currentTierName === tierAtRequest) chunkCache.set(cacheKey, buffers);
         return buffers;
@@ -315,6 +334,22 @@ export function createMeshHexLayer(app: Application): MeshHexLayer {
         inFlight.delete(key);
         stats.inFlight = inFlight.size;
         if (err instanceof DOMException && err.name === 'AbortError') return;
+        if (err instanceof QueueFullError) {
+          // Worker pool queue full — schedule retry on next cull.
+          // Static-viewport rAF driver: if this is the first retry key added
+          // (Set was empty), schedule a one-shot rAF to drive the drain.
+          // This handles static viewports where no 'moved'/'zoomed' events fire.
+          const wasEmpty = retryNextCull.size === 0;
+          retryNextCull.add(key);
+          if (wasEmpty && !retryRafScheduled && cullNowRef) {
+            retryRafScheduled = true;
+            requestAnimationFrame(() => {
+              retryRafScheduled = false;
+              cullNowRef?.();
+            });
+          }
+          return;
+        }
         console.warn(`[mesh-hex] chunk ${key} (${cacheKey}) load failed`, err);
       });
   };
@@ -396,6 +431,29 @@ export function createMeshHexLayer(app: Application): MeshHexLayer {
     if (!currentTierName) return;
     const t0 = performance.now();
     performance.mark('cull-query-start');
+
+    // Phase 8.3: drain QueueFullError retry set.
+    // Re-attempt chunks that failed with QueueFullError last cull.
+    // retryNextCull is cleared before issuing new fetches so that
+    // a second QueueFullError re-adds the key cleanly.
+    if (retryNextCull.size > 0) {
+      const retryKeys = Array.from(retryNextCull);
+      retryNextCull.clear();
+      for (const retryKey of retryKeys) {
+        // Find the rbush entry for this key to get entry + offsetX.
+        // Key format: `${chunkId}@${offsetX}` — parse offsetX.
+        const atIdx = retryKey.lastIndexOf('@');
+        if (atIdx < 0) continue;
+        const offsetX = parseFloat(retryKey.slice(atIdx + 1));
+        // Re-issue fetch (inFlight guard prevents duplicates).
+        // rbush lookup by scanning current tier entries.
+        const allEntries = rbush.all();
+        const rbEntry = allEntries.find((e) => e.key === retryKey);
+        if (rbEntry && visibleSet.has(retryKey)) {
+          fetchAndMount(retryKey, rbEntry.manifestEntry, offsetX);
+        }
+      }
+    }
 
     // Hotfix: compute wrapShift = nearest multiple of W to viewport center.
     // Then normalize bbox into canonical range for rbush query, and shift
@@ -511,7 +569,7 @@ export function createMeshHexLayer(app: Application): MeshHexLayer {
       if (signal?.aborted) return;
 
       try {
-        const buffers = await loadChunk(entry, signal);
+        const buffers = await loadChunk(entry, signal, tierName);
         if (signal?.aborted) return;
         chunkCache.set(cacheKey, buffers);
         warmed++;
@@ -532,10 +590,64 @@ export function createMeshHexLayer(app: Application): MeshHexLayer {
     bordersByKey.clear();
     clearOldTier(); // Phase 7.9 (A): sweep graveyard on layer destroy.
     inFlightByCache.clear();
+    retryNextCull.clear();
     chunkCache.clear();
     shader.destroy();
     root.destroy({ children: true });
   };
 
-  return { root, setTier, setBordersVisible, updateVisibility, getStats, prefetchTier, destroy };
+  // Phase 8.3: wire cullNow reference for static-viewport rAF retry driver.
+  const setCullNow = (fn: () => void): void => {
+    cullNowRef = fn;
+  };
+
+  /**
+   * Phase 8 H3: cold-cache decode stress. Clears ChunkCache, then issues
+   * `jobCount` loadChunk() calls back-to-back against the active tier's
+   * manifest entries. Returns array of per-job roundtrip latencies in ms.
+   * Bench scenario 4 uses this to compute true postMessage roundtrip p95.
+   *
+   * If no manifest is loaded yet or the active tier is empty, returns [].
+   */
+  const forceWorkerStress = async (jobCount: number): Promise<{ latencies: number[]; failedCount: number }> => {
+    if (!manifest) manifest = await loadChunksManifest();
+    if (!currentTierName) return { latencies: [], failedCount: 0 };
+    const tier = manifest.tiers[currentTierName];
+    if (!tier || tier.chunks.length === 0) return { latencies: [], failedCount: 0 };
+
+    chunkCache.clear();
+
+    const entries = tier.chunks;
+    const latencies: number[] = [];
+    let failedCount = 0;
+    const stressAbort = new AbortController();
+    for (let i = 0; i < jobCount; i++) {
+      const entry = entries[i % entries.length]!;
+      const t0 = performance.now();
+      try {
+        await loadChunk(entry, stressAbort.signal, currentTierName);
+      } catch (err) {
+        // Abort on capability fallback or hard error so caller sees a clear signal.
+        if (err instanceof DOMException && err.name === 'AbortError') break;
+        // Don't fail the whole loop on transient errors — count as failure.
+        failedCount++;
+        latencies.push(-1);
+        continue;
+      }
+      latencies.push(performance.now() - t0);
+    }
+    return { latencies, failedCount };
+  };
+
+  return {
+    root,
+    setTier,
+    setBordersVisible,
+    updateVisibility,
+    getStats,
+    prefetchTier,
+    setCullNow,
+    forceWorkerStress,
+    destroy,
+  };
 }
