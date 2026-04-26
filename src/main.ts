@@ -1,10 +1,11 @@
 /**
  * Bootstrap entry. SPEC v1.0 Section 11 Phase 0-3.
  *
- * Phase 0: empty Pixi canvas full-screen.
- * Phase 2: data loader (manifest + countries + tier).
- * Phase 3: viewport + hex layer + initial render.
+ * Phase 7: ?engine=mesh (default) uses src/render/meshHexLayer.ts (pre-baked
+ * chunked mesh buffers). ?engine=particles falls back to Phase 6
+ * src/render/hexLayer.ts (ParticleContainer) for safe rollback.
  */
+import type { Container } from 'pixi.js';
 import { createStage, mountStage } from './render/stage';
 import {
   createViewport,
@@ -13,6 +14,7 @@ import {
   enableInfiniteWrap,
 } from './render/viewport';
 import { createHexLayer } from './render/hexLayer';
+import { createMeshHexLayer } from './render/meshHexLayer';
 import { createBenchmark } from './render/benchmark';
 import { loadManifest } from './data/manifest';
 import { loadCountries } from './data/countries';
@@ -33,6 +35,17 @@ function throttleRaf(fn: () => void): () => void {
   };
 }
 
+interface ViewportBbox { minX: number; minY: number; maxX: number; maxY: number }
+
+interface UnifiedHexLayer {
+  root: Container;
+  setTier(tierName: string, sizeKm: number): Promise<void>;
+  setBordersVisible(visible: boolean): void;
+  updateVisibility(bbox: ViewportBbox): void;
+  getStats(): { visibleChunks: number; builtChunks: number; totalChunks: number; lastBuildMs: number; lastCullMs: number; lastTierSwitchMs: number };
+  destroy(): void;
+}
+
 async function bootstrap(): Promise<void> {
   performance.mark('boot-start');
 
@@ -49,20 +62,42 @@ async function bootstrap(): Promise<void> {
   // Phase 6.7: infinite horizontal wrap (replaces tier-aware pan clamps).
   enableInfiniteWrap(viewport);
 
-  const hexLayer = createHexLayer(app);
-  viewport.addChild(hexLayer.root);
+  // Phase 7: engine selector. Default = mesh (Phase 7 path). ?engine=particles
+  // falls back to Phase 6 ParticleContainer renderer (rollback path D-8).
+  const engine = (new URLSearchParams(location.search).get('engine') ?? 'mesh') as 'mesh' | 'particles';
 
-  const benchmark = createBenchmark(app, hexLayer);
-
-  // Load data
+  // Load common data
   const [manifest, countries] = await Promise.all([loadManifest(), loadCountries()]);
   const lut = buildColorLut(countries.countries);
   const availableTiers = new Set(Object.keys(manifest.tiles));
 
+  // Build unified layer adapter — both engines satisfy the same interface.
+  let hexLayer: UnifiedHexLayer;
+  if (engine === 'mesh') {
+    const meshLayer = createMeshHexLayer(app);
+    hexLayer = meshLayer; // signatures align (setTier async, all else identical)
+  } else {
+    const particles = createHexLayer(app);
+    hexLayer = {
+      root: particles.root,
+      setTier: async (tierName: string) => {
+        const td = await loadTier(tierName);
+        particles.setTier(td, lut);
+      },
+      setBordersVisible: particles.setBordersVisible,
+      updateVisibility: particles.updateVisibility,
+      getStats: particles.getStats,
+      destroy: particles.destroy,
+    };
+  }
+  viewport.addChild(hexLayer.root);
+
+  const benchmark = createBenchmark(app, hexLayer);
+
   // Initial: load coarsest tier for instant world view
   const initialTier = pickTier(1, availableTiers);
-  const tier = await loadTier(initialTier);
-  hexLayer.setTier(tier, lut);
+  const initialSizeKm = manifest.tiles[initialTier]?.sizeKm ?? 50;
+  await hexLayer.setTier(initialTier, initialSizeKm);
 
   fitViewportToWorld(viewport, app);
 
@@ -88,10 +123,11 @@ async function bootstrap(): Promise<void> {
   performance.measure('boot-to-playable', 'boot-start', 'boot-end');
   const m = performance.getEntriesByName('boot-to-playable').pop();
   console.info('[boot] ready', {
+    engine,
     bootMs: m ? Math.round(m.duration) : null,
     initialTier,
     countryCount: countries.countries.length,
-    hexCount: tier.hexes.length,
+    hexCount: manifest.tiles[initialTier]?.hexCount ?? 0,
     screen: { w: app.screen.width, h: app.screen.height },
   });
 
@@ -99,9 +135,10 @@ async function bootstrap(): Promise<void> {
   let currentTier = initialTier;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const w = window as any;
+  w.__mwEngine = engine;
   w.__mwTier = currentTier;
   w.__mwZoom = viewport.scale.x;
-  w.__mwHexCount = tier.hexes.length;
+  w.__mwHexCount = manifest.tiles[initialTier]?.hexCount ?? 0;
 
   // Justin 2026-04-26: borders chỉ visible khi zoom >= 0.9× để tránh sọc
   // mờ moiré ở fit-to-screen. Inner-country hexes seamless via pure-fill texture.
@@ -151,17 +188,17 @@ async function bootstrap(): Promise<void> {
       if (next === currentTier) return;
       lodInFlight = true;
       const fromTier = currentTier;
+      const sizeKm = manifest.tiles[next]?.sizeKm ?? 50;
       void (async () => {
         try {
-          const td = await loadTier(next);
+          await hexLayer.setTier(next, sizeKm);
           currentTier = next;
-          hexLayer.setTier(td, lut);
           // Phase 6: re-cull immediately for new tier so first post-switch
           // frame already shows visible chunks (else 1-frame blank flash).
           cullNow();
           benchmark.recordTierSwitch(fromTier, next, hexLayer.getStats().lastTierSwitchMs);
           w.__mwTier = currentTier;
-          w.__mwHexCount = td.hexes.length;
+          w.__mwHexCount = manifest.tiles[next]?.hexCount ?? 0;
           console.info(`[lod] → ${next} at zoom ${viewport.scale.x.toFixed(2)}`);
         } catch (err) {
           console.warn(`[lod] tier ${next} load failed`, err);
@@ -191,21 +228,22 @@ bootstrap().catch((err) => {
   document.body.innerHTML = `<pre style="color:#f00;padding:16px;font-family:monospace;">[boot] ${err instanceof Error ? err.message : String(err)}</pre>`;
 });
 
-// Debug HUD: tier + zoom + Phase 6 chunk metrics (top-left, multi-line).
+// Debug HUD: tier + zoom + Phase 6 chunk metrics + Phase 7 engine (top-left).
 queueMicrotask(() => {
   const hud = document.createElement('div');
   hud.style.cssText = 'position:fixed;top:env(safe-area-inset-top, 8px);left:8px;color:#00e5ff;font:11px/1.4 \'JetBrains Mono\',monospace;background:rgba(0,8,20,.7);padding:4px 6px;border:1px solid #0088aa;z-index:9999;pointer-events:none;white-space:pre;';
-  hud.textContent = 'tier: — | zoom: —';
+  hud.textContent = 'engine: — | tier: — | zoom: —';
   document.body.appendChild(hud);
   setInterval(() => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const w = window as any;
+    const eng = w.__mwEngine ?? '—';
     const z = w.__mwZoom ?? 0;
     const t = w.__mwTier ?? '—';
     const h = w.__mwHexCount ?? 0;
     const fps = w.__mwApp?.ticker?.FPS ?? 0;
     const stats = w.__mwHexLayer?.getStats?.();
-    const line1 = `fps: ${fps.toFixed(0)} | tier: ${t} | zoom: ${z.toFixed(2)}× | hexes: ${h.toLocaleString()}`;
+    const line1 = `engine: ${eng} | fps: ${fps.toFixed(0)} | tier: ${t} | zoom: ${z.toFixed(2)}× | hexes: ${h.toLocaleString()}`;
     const line2 = stats
       ? `chunks: ${stats.visibleChunks}/${stats.totalChunks} visible | built: ${stats.builtChunks}/${stats.totalChunks}`
       : '';
@@ -215,4 +253,3 @@ queueMicrotask(() => {
     hud.textContent = [line1, line2, line3].filter(Boolean).join('\n');
   }, 250);
 });
-

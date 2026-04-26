@@ -8,7 +8,11 @@
  * Returns 0 on unsupported browsers (Safari, Firefox).
  */
 import type { Application } from 'pixi.js';
-import type { HexLayer } from './hexLayer';
+
+/** Common stats subset both HexLayer (Phase 6) and MeshHexLayer (Phase 7) expose. */
+interface StatsProvider {
+  getStats(): { visibleChunks: number };
+}
 
 export interface BenchmarkSnapshot {
   fps_p50: number;
@@ -40,7 +44,7 @@ function percentile(sorted: number[], p: number): number {
   return sorted[idx]!;
 }
 
-export function createBenchmark(app: Application, hexLayer: HexLayer): Benchmark {
+export function createBenchmark(app: Application, hexLayer: StatsProvider): Benchmark {
   const fpsBuf: number[] = [];
   const chunkBuildBuf: number[] = [];
   const visibleBuf: number[] = [];
