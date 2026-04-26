@@ -53,7 +53,8 @@ interface FinalReport {
   };
   scenarios: ScenarioResult[];
   cumulative: any; // benchmark.snapshot()
-  gates: Array<{ name: string; target: string; actual: string; pass: boolean }>;
+  gates: Array<{ name: string; target: string; actual: string; pass: boolean; hard: boolean }>;
+  /** True only if all `hard: true` gates pass. Informational gates do not affect this. */
   passAll: boolean;
 }
 
@@ -308,36 +309,41 @@ function checkGates(scenarios: ScenarioResult[], cumulative: any): FinalReport['
       target: `< ${tierSwitch_50_25_target} ms`,
       actual: `${tierSwitch['50km->25km'] ?? 'n/a'} ms`,
       pass: typeof tierSwitch['50km->25km'] === 'number' && tierSwitch['50km->25km'] < tierSwitch_50_25_target,
+      hard: true,
     },
     {
       name: `tier_switch_25to10_under_${tierSwitch_25_10_target}ms`,
       target: `< ${tierSwitch_25_10_target} ms`,
       actual: `${tierSwitch['25km->10km'] ?? 'n/a'} ms`,
       pass: typeof tierSwitch['25km->10km'] === 'number' && tierSwitch['25km->10km'] < tierSwitch_25_10_target,
+      hard: true,
     },
     {
       name: `pan_storm_10km_fps_p95_ge_${fps_p95_target}`,
       target: `≥ ${fps_p95_target} fps`,
       actual: `${s1?.fps_p95 ?? 'n/a'} fps`,
       pass: (s1?.fps_p95 ?? 0) >= fps_p95_target,
+      hard: true,
     },
     {
       name: `pinch_zoom_fps_p95_ge_${fps_pinch_target}`,
       target: `≥ ${fps_pinch_target} fps`,
       actual: `${s2?.fps_p95 ?? 'n/a'} fps`,
       pass: (s2?.fps_p95 ?? 0) >= fps_pinch_target,
+      hard: true,
     },
-    // Memory policy (Codex re-review MEDIUM fix):
+    // Memory policy (Codex re-review MEDIUM fixes):
     // - SETTLED memory (post-GC cumulative end-of-bench): HARD gate, < 250 MB.
     //   This is the architecturally-meaningful number.
     // - PEAK memory (pre-GC sample max during pan storm): INFORMATIONAL only,
-    //   < 700 MB tolerance. V8 GC scheduling causes ±30% run-to-run variance;
-    //   real iOS Safari has more aggressive GC. Tracked, not gated.
+    //   `hard: false` excludes from passAll. V8 GC scheduling causes ±30%
+    //   run-to-run variance; real iOS Safari has more aggressive GC.
     {
       name: 'memory_settled_under_250mb',
       target: '< 250 MB (cumulative end-of-bench, HARD)',
       actual: `${memMb} MB`,
       pass: memMb > 0 && memMb < 250,
+      hard: true,
     },
     {
       name: 'memory_peak_under_700mb_informational',
@@ -345,24 +351,28 @@ function checkGates(scenarios: ScenarioResult[], cumulative: any): FinalReport['
       actual: `${Math.max(...scenarios.map((s) => s.memoryMb_max), memMb)} MB`,
       pass: Math.max(...scenarios.map((s) => s.memoryMb_max), memMb) > 0
             && Math.max(...scenarios.map((s) => s.memoryMb_max), memMb) < 700,
+      hard: false,
     },
     {
       name: 'visible_chunks_max_le_12_at_10km',
       target: '≤ 12',
       actual: `${s1?.visibleChunks_max ?? 'n/a'}`,
       pass: (s1?.visibleChunks_max ?? 0) > 0 && (s1?.visibleChunks_max ?? 99) <= 12,
+      hard: true,
     },
     {
       name: `chunk_build_p95_under_${chunk_build_target}ms`,
       target: `< ${chunk_build_target} ms`,
       actual: `${buildMs.p95} ms (max ${buildMs.max} ms)`,
       pass: buildMs.p95 > 0 && buildMs.p95 < chunk_build_target,
+      hard: true,
     },
     {
       name: `antimeridian_pan_10km_fps_p95_ge_${fps_p95_target}`,
       target: `≥ ${fps_p95_target} fps`,
       actual: `${s4?.fps_p95 ?? 'n/a'} fps`,
       pass: (s4?.fps_p95 ?? 0) >= fps_p95_target,
+      hard: true,
     },
   ];
   return gates;
@@ -408,7 +418,9 @@ async function main(): Promise<void> {
     const cumulative = await page.evaluate(() => (window as any).__mwBenchmark());
 
     const gates = checkGates(scenarios, cumulative);
-    const passAll = gates.every((g) => g.pass);
+    // Codex re-review MEDIUM fix: passAll only counts HARD gates. Informational
+    // gates (memory_peak under V8 GC noise) tracked but don't gate merge.
+    const passAll = gates.filter((g) => g.hard).every((g) => g.pass);
 
     const report: FinalReport = {
       meta: {
@@ -429,9 +441,10 @@ async function main(): Promise<void> {
     console.log('\n=== GATES ===');
     for (const g of gates) {
       const mark = g.pass ? '✓' : '✗';
-      console.log(`  ${mark}  ${g.name.padEnd(40)} ${g.actual.padStart(20)} (target: ${g.target})`);
+      const tag = g.hard ? '' : ' [info]';
+      console.log(`  ${mark}  ${g.name.padEnd(40)} ${g.actual.padStart(20)} (target: ${g.target})${tag}`);
     }
-    console.log(`\nResult: ${passAll ? 'PASS' : 'FAIL'}`);
+    console.log(`\nResult: ${passAll ? 'PASS' : 'FAIL'} (hard gates only; informational excluded from passAll)`);
     if (!passAll) exitCode = 1;
 
     await browser.close();

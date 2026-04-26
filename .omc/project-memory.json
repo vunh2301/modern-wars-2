@@ -180,14 +180,20 @@
     },
     {
       "path": "src\\render\\hexLayer.ts",
-      "accessCount": 41,
-      "lastAccessed": 1777193710923,
+      "accessCount": 42,
+      "lastAccessed": 1777195780775,
       "type": "file"
     },
     {
       "path": "src\\render\\viewport.ts",
       "accessCount": 20,
       "lastAccessed": 1777193790867,
+      "type": "file"
+    },
+    {
+      "path": "scripts\\bench-phase6.ts",
+      "accessCount": 20,
+      "lastAccessed": 1777195919659,
       "type": "file"
     },
     {
@@ -200,12 +206,6 @@
       "path": "scripts\\verify-screenshot.mjs",
       "accessCount": 15,
       "lastAccessed": 1777182916225,
-      "type": "file"
-    },
-    {
-      "path": "scripts\\bench-phase6.ts",
-      "accessCount": 15,
-      "lastAccessed": 1777195347881,
       "type": "file"
     },
     {
@@ -287,6 +287,12 @@
       "type": "file"
     },
     {
+      "path": "src\\render\\stage.ts",
+      "accessCount": 3,
+      "lastAccessed": 1777195780834,
+      "type": "file"
+    },
+    {
       "path": ".screenshots\\02-zoom-0.5.png",
       "accessCount": 2,
       "lastAccessed": 1777169398421,
@@ -320,12 +326,6 @@
       "path": "src\\render\\lod.ts",
       "accessCount": 2,
       "lastAccessed": 1777182020514,
-      "type": "file"
-    },
-    {
-      "path": "src\\render\\stage.ts",
-      "accessCount": 2,
-      "lastAccessed": 1777182047081,
       "type": "file"
     },
     {
