@@ -137,6 +137,7 @@ export function createHexLayer(app: Application): HexLayer {
       return; // empty chunk — never builds GPU
     }
 
+    performance.mark('chunk-build-start');
     const t0 = performance.now();
     const scale = currentHexSizeWorldPx / HEX_TEXTURE_SIDE;
     const lut = currentLut;
@@ -189,6 +190,8 @@ export function createHexLayer(app: Application): HexLayer {
     const dt = performance.now() - t0;
     stats.lastBuildMs = dt;
     stats.builtChunks++;
+    performance.mark('chunk-build-end');
+    performance.measure('chunk-build', 'chunk-build-start', 'chunk-build-end');
     if (hexes.length > 50000) {
       console.warn(
         `[hex-layer] chunk ${chunk.bbox.id} built ${hexes.length} hexes in ${dt.toFixed(1)}ms (>50K threshold)`,
