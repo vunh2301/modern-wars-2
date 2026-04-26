@@ -51,6 +51,25 @@ await new Promise((r) => setTimeout(r, 4000));
 await page.screenshot({ path: `${OUT}/05-europe-zoom-4.png` });
 console.log('  → 05-europe-zoom-4.png (Paris @ zoom 4×)');
 
+// Pan to antimeridian — Bering Strait (180° / 65°N) at zoom 1× to verify
+// wrap: Russia Chukotka + Alaska visible from both sides via 3-copy hexLayer.
+await page.evaluate(() => {
+  window.__mwSetZoom?.(1);
+  window.__mwCenterOn?.(180, 65);
+});
+await new Promise((r) => setTimeout(r, 3000));
+await page.screenshot({ path: `${OUT}/06-bering.png` });
+console.log('  → 06-bering.png (Bering Strait lng 180° / 65°N @ zoom 1×)');
+
+// Pan way east (lng 270° = wrapped to lng -90° = North America center).
+// Should show Mexico/Caribbean continuously via wrap.
+await page.evaluate(() => {
+  window.__mwCenterOn?.(270, 25);
+});
+await new Promise((r) => setTimeout(r, 2000));
+await page.screenshot({ path: `${OUT}/07-wrapped-270.png` });
+console.log('  → 07-wrapped-270.png (lng 270° wraps to -90° / N. America)');
+
 console.log('\n=== LOGS ===');
 for (const l of logs) console.log(l);
 

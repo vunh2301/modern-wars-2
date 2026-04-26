@@ -25,8 +25,8 @@ export function createViewport(app: Application): Viewport {
     .pinch()
     .wheel()
     .decelerate({ friction: 0.93 })
-    // minScale 0.05 lets phone (430 px wide) fit world (~6435 px wide).
-    .clampZoom({ minScale: 0.05, maxScale: 32 });
+    // Justin 2026-04-26: minScale 0.20× (was 0.05). Initial fit clamps up.
+    .clampZoom({ minScale: 0.20, maxScale: 32 });
 
   return viewport;
 }
@@ -46,7 +46,8 @@ export function fitViewportToWorld(viewport: Viewport, app: Application): void {
   const fitY = app.screen.height / bounds.height;
   // Use the LARGER fit ratio so the smaller dimension fills the screen tightly,
   // letting the other dimension overflow (typical map app behavior).
-  const initialZoom = Math.max(fitX, fitY) * 0.9;
+  // Initial zoom respects clampZoom.minScale (0.20×).
+  const initialZoom = Math.max(0.20, Math.max(fitX, fitY) * 0.9);
   viewport.setZoom(initialZoom, true);
   // Center at (lng=0°, lat=20°N) → world px (Y inverted for screen-down).
   viewport.moveCenter(0, -0.357 * 1024);

@@ -124,11 +124,37 @@ async function bootstrap(): Promise<void> {
     }, 250);
   };
 
+  // Justin 2026-04-26 "move qua trái phải cuộn nối nhau": world wrap.
+  // hexLayer renders 3 copies at offsets [-W, 0, +W]. After user pans across
+  // antimeridian, snap viewport.center.x by ±W invisibly (visible content
+  // identical). Re-entrancy guard so moveCenter() doesn't recurse 'moved'.
+  const WORLD_W = 2 * Math.PI * 1024;
+  let wrapping = false;
+  const wrapCenter = (): void => {
+    if (wrapping) return;
+    const cx = viewport.center.x;
+    if (cx > WORLD_W / 2) {
+      wrapping = true;
+      viewport.moveCenter(cx - WORLD_W, viewport.center.y);
+      wrapping = false;
+    } else if (cx < -WORLD_W / 2) {
+      wrapping = true;
+      viewport.moveCenter(cx + WORLD_W, viewport.center.y);
+      wrapping = false;
+    }
+  };
+
   viewport.on('zoomed', () => {
     updateHud();
     maybeSwitchLod();
   });
-  viewport.on('moved', updateHud);
+  viewport.on('moved', () => {
+    wrapCenter();
+    updateHud();
+  });
+
+  // FPS sampler — Pixi Application.ticker.FPS already smoothed.
+  w.__mwApp = app;
 }
 
 bootstrap().catch((err) => {
@@ -149,7 +175,9 @@ queueMicrotask(() => {
     const z = w.__mwZoom ?? 0;
     const t = w.__mwTier ?? '—';
     const h = w.__mwHexCount ?? 0;
-    hud.textContent = `tier: ${t} | zoom: ${z.toFixed(2)}× | hexes: ${h.toLocaleString()}`;
+    const fps = w.__mwApp?.ticker?.FPS ?? 0;
+    hud.textContent =
+      `fps: ${fps.toFixed(0)} | tier: ${t} | zoom: ${z.toFixed(2)}× | hexes: ${h.toLocaleString()}`;
   }, 250);
 });
 

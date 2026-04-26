@@ -28,7 +28,10 @@ import {
 } from 'pixi.js';
 import type { TierData, HexRecord } from '../data/tiers';
 import { axialToPx, SQRT_3 } from '../geo/hex';
-import { kmToWorldPx } from '../geo/projection';
+import { kmToWorldPx, WORLD_SCALE_PX } from '../geo/projection';
+
+// World width for horizontal wrap-around (3 copies at [-W, 0, +W]).
+const WORLD_WIDTH = 2 * Math.PI * WORLD_SCALE_PX;
 
 export interface HexLayer {
   root: Container;
@@ -130,77 +133,93 @@ export function createHexLayer(app: Application): HexLayer {
 
   const texture = makeHexTexture(app);
 
-  let pc: ParticleContainer | null = null;
-  let borders: Graphics | null = null;
+  // 3 copies at world-x offsets [-W, 0, +W] for horizontal wrap-around.
+  // Justin 2026-04-26: "move qua trái và phải cho cuộn nối nhau được ko".
+  const WRAP_OFFSETS = [-WORLD_WIDTH, 0, WORLD_WIDTH] as const;
+  let particleLayers: ParticleContainer[] = [];
+  let borderLayers: Graphics[] = [];
 
   const setTier = (tier: TierData, lut: Uint32Array): void => {
-    if (pc) {
-      pc.destroy({ children: true });
-      pc = null;
-    }
-    if (borders) {
-      borders.destroy();
-      borders = null;
-    }
-
-    pc = new ParticleContainer({
-      dynamicProperties: { position: false, scale: false, rotation: false, color: false },
-    });
-    pc.label = `tier-${tier.name}`;
-    pc.cullable = false;
+    for (const l of particleLayers) l.destroy({ children: true });
+    for (const b of borderLayers) b.destroy();
+    particleLayers = [];
+    borderLayers = [];
 
     const hexSizeWorldPx = kmToWorldPx(tier.sizeKm);
     const scale = hexSizeWorldPx / HEX_TEXTURE_SIDE;
 
+    // Pre-compute geometry (positions, tints, edges) ONCE — reused across 3 copies.
+    const N = tier.hexes.length;
+    const px = new Float32Array(N);
+    const py = new Float32Array(N);
+    const tints = new Uint32Array(N);
     const t0 = performance.now();
-    for (let i = 0; i < tier.hexes.length; i++) {
+    for (let i = 0; i < N; i++) {
       const h = tier.hexes[i]!;
       const [x, y] = axialToPx(h.q, h.r, hexSizeWorldPx);
-      const tint = lut[h.countryId] ?? 0x666688;
-      pc.addParticle(new Particle({
-        texture,
-        x,
-        y,
-        anchorX: 0.5,
-        anchorY: 0.5,
-        scaleX: scale,
-        scaleY: scale,
-        tint,
-      }));
+      px[i] = x;
+      py[i] = y;
+      tints[i] = lut[h.countryId] ?? 0x666688;
     }
-    const dtFill = performance.now() - t0;
-    root.addChild(pc);
+    const dtGeom = performance.now() - t0;
 
-    // Borders overlay — chỉ giữa các country khác nhau / rìa map.
     const t1 = performance.now();
     const edges = computeBorderEdges(tier.hexes, hexSizeWorldPx);
-    borders = new Graphics();
-    borders.label = `borders-${tier.name}`;
-    borders.cullable = false;
-    for (let i = 0; i < edges.length; i += 4) {
-      borders.moveTo(edges[i]!, edges[i + 1]!).lineTo(edges[i + 2]!, edges[i + 3]!);
+    const dtEdges = performance.now() - t1;
+
+    const t2 = performance.now();
+    for (const ox of WRAP_OFFSETS) {
+      const pc = new ParticleContainer({
+        dynamicProperties: { position: false, scale: false, rotation: false, color: false },
+      });
+      pc.label = `tier-${tier.name}-${ox}`;
+      pc.cullable = false;
+      pc.x = ox;
+      for (let i = 0; i < N; i++) {
+        pc.addParticle(new Particle({
+          texture,
+          x: px[i]!,
+          y: py[i]!,
+          anchorX: 0.5,
+          anchorY: 0.5,
+          scaleX: scale,
+          scaleY: scale,
+          tint: tints[i]!,
+        }));
+      }
+      particleLayers.push(pc);
+      root.addChild(pc);
+
+      const g = new Graphics();
+      g.label = `borders-${tier.name}-${ox}`;
+      g.cullable = false;
+      g.x = ox;
+      for (let i = 0; i < edges.length; i += 4) {
+        g.moveTo(edges[i]!, edges[i + 1]!).lineTo(edges[i + 2]!, edges[i + 3]!);
+      }
+      g.stroke({
+        color: BORDER_COLOR,
+        alpha: BORDER_ALPHA,
+        width: hexSizeWorldPx * BORDER_WIDTH_FACTOR,
+      });
+      borderLayers.push(g);
+      root.addChild(g);
     }
-    borders.stroke({
-      color: BORDER_COLOR,
-      alpha: BORDER_ALPHA,
-      width: hexSizeWorldPx * BORDER_WIDTH_FACTOR,
-    });
-    root.addChild(borders);
-    const dtBorders = performance.now() - t1;
+    const dtBuild = performance.now() - t2;
 
     console.info(
-      `[hex-layer] tier ${tier.name}: ${tier.hexes.length} particles ${dtFill.toFixed(0)}ms, ` +
-      `${edges.length / 4} border segments ${dtBorders.toFixed(0)}ms`,
+      `[hex-layer] tier ${tier.name}: ${N}×3 particles, ${edges.length / 4}×3 border segments — ` +
+      `geom ${dtGeom.toFixed(0)}ms, edges ${dtEdges.toFixed(0)}ms, build ${dtBuild.toFixed(0)}ms`,
     );
   };
 
   const setBordersVisible = (visible: boolean): void => {
-    if (borders) borders.visible = visible;
+    for (const b of borderLayers) b.visible = visible;
   };
 
   const destroy = (): void => {
-    if (pc) pc.destroy({ children: true });
-    if (borders) borders.destroy();
+    for (const l of particleLayers) l.destroy({ children: true });
+    for (const b of borderLayers) b.destroy();
     texture.destroy();
     root.destroy({ children: true });
   };
