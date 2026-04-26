@@ -197,7 +197,11 @@ export class WorkerPool {
     this.poolSize = opts.size ?? DEFAULT_POOL_SIZE;
     this.lazy = opts.lazy ?? true;
     this.scheduler = opts.scheduler ?? new FifoRoundRobinScheduler();
-    const maxQueue = opts.maxQueueDepth ?? this.poolSize * 2;
+    // Default queue depth: 16× pool size (64 for default 4 workers).
+    // Rationale: visible chunk count ≤ 48 (MAX_BUILT_INSTANCES in meshHexLayer)
+    // × 3 wrap offsets = 144 possible in-flight fetches at peak. 64 covers
+    // typical burst without backpressure; Phase 8.6 bench target = 0 rejects.
+    const maxQueue = opts.maxQueueDepth ?? this.poolSize * 16;
     this.queue = new BoundedQueue(maxQueue);
 
     // Default worker URL — points to decoder.worker.ts (Vite rewrites at build).
