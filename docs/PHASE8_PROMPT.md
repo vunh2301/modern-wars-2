@@ -343,7 +343,7 @@ on receipt before resolving the Promise. Mismatch = throw with diagnostic
   retry queue: chunks rejected last frame are re-attempted before fresh visibility
   query.
 - **Static-viewport retry driver (rev 4 — Codex HIGH):** updateVisibility runs only
-  on `viewport.on('zoomed' | 'moved')` events (main.ts:241,246). On a static viewport,
+  on `viewport.on('zoomed' | 'moved')` events (main.ts:276,281). On a static viewport,
   no event fires → retryNextCull Set fills but never drains. Required behavior:
   when meshHexLayer.fetchAndMount catches QueueFullError AND `retryNextCull.size`
   was 0 (i.e. this is the FIRST retry key added since last cull), schedule a
@@ -460,7 +460,7 @@ baseline:
 | Default (DS supported, Worker supported) | Worker pool |
 | `?worker=off` URL param + DS supported | Main thread (Phase 7.9 path) |
 | `typeof Worker === undefined` | Main thread (DS-only env, e.g. older Safari with patches) |
-| `typeof DecompressionStream === undefined` (anywhere) | **Boot fails** — surfaced by existing main.ts catch (line 256) |
+| `typeof DecompressionStream === undefined` (anywhere) | **Boot fails** — surfaced by existing main.ts catch (line 290) |
 | Worker `ready` reports no DecompressionStream (rare: worker-only-feature gap) | Main thread for THAT session + warn (worker-side support gap implies platform inconsistency) |
 | `?worker=on` explicit + DS + Worker | Worker pool |
 
@@ -597,7 +597,7 @@ Stop and ask Justin if uncertain about scope — don't guess.
 - src/workers/types.ts — full discriminated union + ResultFor + assertNever (per §B above)
 - src/workers/pool.ts — WorkerPool class
   - Lazy spawn (default) + `warmup()` for eager init
-  - Configurable dispatchStrategy (default round-robin)
+  - Configurable scheduler: SchedulingStrategy (default FifoRoundRobinScheduler)
   - Job ID → worker index map (for cancel routing)
   - Queue cap with QueueFullError rejection
   - Cancel protocol (sends `{type:'cancel'}` to assigned worker)
@@ -816,7 +816,7 @@ Stop after iter 2 — don't push iter 3.
 | R2 | A18 Pro 2P+4E only — 4 workers may oversubscribe E-cores | Phase 8.7 iter 1 candidate: tune pool size to 3; bench iPhone for confirmation |
 | R3 | Worker memory invisible to performance.memory | Document in HUD + phase-8-architecture.md; cross-check via DevTools Performance > Memory |
 | R4 | Worker bundle bloat (accidental pixi.js import) | Build-time assertion in bench-phase8.ts (gzip < 50KB) |
-| R5 | iOS Safari < 16.4 missing DecompressionStream (project-wide hard baseline) | Boot fails via existing main.ts catch (line 256). Phase 8 does NOT add a non-DS path; users on Safari < 16.4 see error UI. Document in release notes. |
+| R5 | iOS Safari < 16.4 missing DecompressionStream (project-wide hard baseline) | Boot fails via existing main.ts catch (line 290). Phase 8 does NOT add a non-DS path; users on Safari < 16.4 see error UI. Document in release notes. |
 | R6 | postMessage overhead eats FPS headroom | Phase 8.7 iter 1: profile clone vs transfer, audit transferList completeness |
 | R7 | Cancellation race (cancel arrives after worker posted result) | Main ignores cancel-acks for already-resolved jobIds (Map cleanup on result delivery) |
 | R8 | Pathfind result allocation churn at 400/sec | Locked: packed Int16Array buffer payload (not Array<[n,n]>) |
