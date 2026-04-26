@@ -178,7 +178,10 @@ export function createHexLayer(app: Application): HexLayer {
 
     performance.mark('chunk-build-start');
     const t0 = performance.now();
-    const scale = currentHexSizeWorldPx / HEX_TEXTURE_SIDE;
+    // 1.06× overlap (2026-04-26): adjacent hexes' AA fringes overlap each
+    // other so bg dark blue doesn't leak through hex boundaries (was visible
+    // as "vết border các cell mờ" zigzag at low zoom). Zero perf cost.
+    const scale = (currentHexSizeWorldPx / HEX_TEXTURE_SIDE) * 1.06;
     const lut = currentLut;
 
     // Particles (hex fills)
