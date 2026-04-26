@@ -70,6 +70,24 @@ await new Promise((r) => setTimeout(r, 2000));
 await page.screenshot({ path: `${OUT}/07-wrapped-270.png` });
 console.log('  → 07-wrapped-270.png (lng 270° wraps to -90° / N. America)');
 
+// Africa Horn (Somaliland 47°E, 9°N) at zoom 5× to verify XM rendered.
+await page.evaluate(() => {
+  window.__mwSetZoom?.(5);
+  window.__mwCenterOn?.(47, 9);
+});
+await new Promise((r) => setTimeout(r, 4000));
+await page.screenshot({ path: `${OUT}/08-somaliland.png` });
+console.log('  → 08-somaliland.png (Somaliland 47°E/9°N @ zoom 5×)');
+
+// Stress: max zoom (8×) on dense urban region — verify no crash.
+await page.evaluate(() => {
+  window.__mwSetZoom?.(8);
+  window.__mwCenterOn?.(2, 48);
+});
+await new Promise((r) => setTimeout(r, 4000));
+await page.screenshot({ path: `${OUT}/09-max-zoom.png` });
+console.log('  → 09-max-zoom.png (Paris @ zoom 8× = max)');
+
 console.log('\n=== LOGS ===');
 for (const l of logs) console.log(l);
 

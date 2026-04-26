@@ -28,10 +28,12 @@ import {
 } from 'pixi.js';
 import type { TierData, HexRecord } from '../data/tiers';
 import { axialToPx, SQRT_3 } from '../geo/hex';
-import { kmToWorldPx, WORLD_SCALE_PX } from '../geo/projection';
+import { kmToWorldPx, WRAP_DISTANCE_PX, WRAP_HEX_COUNT_BASE, WRAP_BASE_TIER_KM } from '../geo/projection';
 
-// World width for horizontal wrap-around (3 copies at [-W, 0, +W]).
-const WORLD_WIDTH = 2 * Math.PI * WORLD_SCALE_PX;
+// Tiers nhẹ render 3 wrap copies (seamless pan qua antimeridian); tier
+// fine ≤ 10km giữ 1 copy để tránh OOM trên mobile (Justin 2026-04-26
+// "zoom in hết cỡ cũng bị crash" — 1.25M × 3 = 3.75M particles vượt iPhone GPU).
+const WRAP_TIER_NAMES: ReadonlySet<string> = new Set(['50km', '25km']);
 
 export interface HexLayer {
   root: Container;
@@ -81,7 +83,11 @@ function makeHexTexture(app: Application): RenderTexture {
  * (tie-break theo countryId thấp hơn). Bao gồm cả edges ở rìa map (neighbor
  * missing) để outline coastlines.
  */
-function computeBorderEdges(hexes: ReadonlyArray<HexRecord>, hexSizeWorldPx: number): Float32Array {
+function computeBorderEdges(
+  hexes: ReadonlyArray<HexRecord>,
+  hexSizeWorldPx: number,
+  wrapHexCount: number,
+): Float32Array {
   // Pack (q,r) → 32-bit int. q,r are int16 → offset +32768 to keep positive.
   const KEY_OFFSET = 32768;
   const countryByKey = new Map<number, number>();
@@ -91,8 +97,21 @@ function computeBorderEdges(hexes: ReadonlyArray<HexRecord>, hexSizeWorldPx: num
     countryByKey.set(key, h.countryId);
   }
 
-  // Perpendicular factor: distance(center→neighbor) = SQRT_3 * size; we want
-  // perpendicular length = size/2 → factor = 1/(2*SQRT_3).
+  const half = Math.floor(wrapHexCount / 2);
+  const qMin = -half;
+  const qMax = qMin + wrapHexCount - 1;
+
+  // Wrap-aware neighbor lookup. Hex at q=qMax has right-neighbor q=qMax+1
+  // which doesn't exist in canonical range — but its wrap-equivalent q=qMin
+  // DOES (rendered at the next world-copy offset). Treat them as the same
+  // hex for border purposes → suppresses double-stroked seam at antimeridian.
+  const lookup = (q: number, r: number): number | undefined => {
+    let qq = q;
+    if (qq > qMax) qq -= wrapHexCount;
+    else if (qq < qMin) qq += wrapHexCount;
+    return countryByKey.get((qq + KEY_OFFSET) * 65536 + (r + KEY_OFFSET));
+  };
+
   const PERP_F = 0.5 / SQRT_3;
   const out: number[] = [];
 
@@ -103,14 +122,9 @@ function computeBorderEdges(hexes: ReadonlyArray<HexRecord>, hexSizeWorldPx: num
       const off = NEIGHBORS[n]!;
       const nq = h.q + off[0];
       const nr = h.r + off[1];
-      const nkey = (nq + KEY_OFFSET) * 65536 + (nr + KEY_OFFSET);
-      const neighborCountry = countryByKey.get(nkey);
+      const neighborCountry = lookup(nq, nr);
 
-      // Same country → no border.
       if (neighborCountry === h.countryId) continue;
-      // Dedup: when both hexes exist (different countries), only draw from
-      // the side with smaller countryId. Edges to ocean (neighbor undefined)
-      // always drawn from current hex.
       if (neighborCountry !== undefined && h.countryId > neighborCountry) continue;
 
       const [nx, ny] = axialToPx(nq, nr, hexSizeWorldPx);
@@ -133,9 +147,6 @@ export function createHexLayer(app: Application): HexLayer {
 
   const texture = makeHexTexture(app);
 
-  // 3 copies at world-x offsets [-W, 0, +W] for horizontal wrap-around.
-  // Justin 2026-04-26: "move qua trái và phải cho cuộn nối nhau được ko".
-  const WRAP_OFFSETS = [-WORLD_WIDTH, 0, WORLD_WIDTH] as const;
   let particleLayers: ParticleContainer[] = [];
   let borderLayers: Graphics[] = [];
 
@@ -148,7 +159,14 @@ export function createHexLayer(app: Application): HexLayer {
     const hexSizeWorldPx = kmToWorldPx(tier.sizeKm);
     const scale = hexSizeWorldPx / HEX_TEXTURE_SIDE;
 
-    // Pre-compute geometry (positions, tints, edges) ONCE — reused across 3 copies.
+    // Wrap copies only for coarse tiers — fine tiers stay single-copy to fit
+    // mobile GPU memory budget. WRAP_DISTANCE_PX = exact integer multiple of
+    // 50km hex pitch → seamless join at antimeridian.
+    const offsets = WRAP_TIER_NAMES.has(tier.name)
+      ? [-WRAP_DISTANCE_PX, 0, WRAP_DISTANCE_PX]
+      : [0];
+
+    // Pre-compute geometry (positions, tints, edges) ONCE — reused across copies.
     const N = tier.hexes.length;
     const px = new Float32Array(N);
     const py = new Float32Array(N);
@@ -163,12 +181,13 @@ export function createHexLayer(app: Application): HexLayer {
     }
     const dtGeom = performance.now() - t0;
 
+    const wrapHexCount = WRAP_HEX_COUNT_BASE * (WRAP_BASE_TIER_KM / tier.sizeKm);
     const t1 = performance.now();
-    const edges = computeBorderEdges(tier.hexes, hexSizeWorldPx);
+    const edges = computeBorderEdges(tier.hexes, hexSizeWorldPx, wrapHexCount);
     const dtEdges = performance.now() - t1;
 
     const t2 = performance.now();
-    for (const ox of WRAP_OFFSETS) {
+    for (const ox of offsets) {
       const pc = new ParticleContainer({
         dynamicProperties: { position: false, scale: false, rotation: false, color: false },
       });
@@ -208,7 +227,8 @@ export function createHexLayer(app: Application): HexLayer {
     const dtBuild = performance.now() - t2;
 
     console.info(
-      `[hex-layer] tier ${tier.name}: ${N}×3 particles, ${edges.length / 4}×3 border segments — ` +
+      `[hex-layer] tier ${tier.name}: ${N}×${offsets.length} particles, ` +
+      `${edges.length / 4}×${offsets.length} border segments — ` +
       `geom ${dtGeom.toFixed(0)}ms, edges ${dtEdges.toFixed(0)}ms, build ${dtBuild.toFixed(0)}ms`,
     );
   };

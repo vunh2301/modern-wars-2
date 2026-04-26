@@ -192,6 +192,14 @@ function multipolyCentroidAndBBox(
 // gameplay-irrelevant, dominates south pole hex grid in purple).
 const EXCLUDE_CODES = new Set(['AQ']);
 
+// Justin 2026-04-26 "thiếu Somaliland". NE flags Somaliland + N. Cyprus
+// as Sovereign country nhưng cả ISO_A2 và ISO_A2_EH đều '-99'. Map ADMIN
+// → synthetic 2-char codes (X-prefix not used by ISO 3166-1).
+const SYNTHETIC_CODE_BY_ADMIN: Record<string, string> = {
+  'Somaliland': 'XM',       // X + reuse Somali first letter
+  'Northern Cyprus': 'XN',  // X + Northern
+};
+
 function loadCountries(geojsonPath: string): Country[] {
   const fc = JSON.parse(readFileSync(geojsonPath, 'utf8')) as { features: Feature[] };
   const seen = new Set<string>();
@@ -207,8 +215,15 @@ function loadCountries(geojsonPath: string): Country[] {
     const rawEH = f.properties.ISO_A2_EH;
     const a2Valid = rawA2 && rawA2 !== '-99' && rawA2.length === 2 ? rawA2 : '';
     const ehValid = rawEH && rawEH !== '-99' && rawEH.length === 2 ? rawEH : '';
-    const code = a2Valid || ehValid;
-    if (!code) continue;
+    let code = a2Valid || ehValid;
+    if (!code) {
+      // No standard ISO. Use synthetic code only for sovereign-country orphans
+      // (Somaliland, N. Cyprus). Skip Indeterminate/Disputed (Siachen Glacier).
+      const admin = (f.properties as { ADMIN?: string }).ADMIN ?? '';
+      const synth = SYNTHETIC_CODE_BY_ADMIN[admin];
+      if (!synth) continue;
+      code = synth;
+    }
     if (EXCLUDE_CODES.has(code)) continue;
     if (seen.has(code)) continue;
     seen.add(code);
@@ -326,31 +341,36 @@ function lookupCountry(
 // ─── Bake one tier ─────────────────────────────────────────────────────────
 interface BakedHex { q: number; r: number; countryId: number; }
 
+// Wrap-align constants — match src/geo/projection.ts WRAP_DISTANCE_PX.
+// Justin 2026-04-26 "điểm nối map bị cắt 1 lằn → cho nó sát vô".
+// Wrap distance phải là bội số chính xác của hex pitch ở mọi tier; chọn
+// 50km làm base, all other tiers (25, 10, 5, 2, 1) là divisor của 50 → integer.
+const WRAP_BASE_TIER_KM = 50;
+const WRAP_HEX_COUNT_BASE = Math.round((2 * Math.PI) / (1.5 * (WRAP_BASE_TIER_KM / KM_PER_RAD)));
+
 function bakeTier(
   sizeKm: number,
   countries: Country[],
   bush: RBush<PolyBushItem>,
 ): BakedHex[] {
-  // Build by-id lookup map (id may not equal index after cross-source re-ID).
   const countriesById = new Map<number, Country>();
   for (const c of countries) countriesById.set(c.id, c);
   const sizeRad = hexInradiusRad(sizeKm);
-  const horizSpacing = 1.5 * sizeRad;
   const vertSpacing = Math.sqrt(3) * sizeRad;
 
   const minMercY = lngLatToMercator(0, -MAX_LAT)[1];
   const maxMercY = lngLatToMercator(0, MAX_LAT)[1];
-  const minMercX = lngLatToMercator(-180, 0)[0];
-  const maxMercX = lngLatToMercator(180, 0)[0];
 
-  // q range driven by mercX width / horizSpacing.
-  const qMin = Math.floor(minMercX / horizSpacing) - 1;
-  const qMax = Math.ceil(maxMercX / horizSpacing) + 1;
+  // Wrap-aligned q range. wrapHexCount per row = base × (50 / sizeKm).
+  // sizeKm phải chia hết 50 (50, 25, 10, 5, 2, 1) → integer count.
+  if (WRAP_BASE_TIER_KM % sizeKm !== 0) {
+    throw new Error(`tier ${sizeKm}km must divide ${WRAP_BASE_TIER_KM}km for wrap-align`);
+  }
+  const wrapHexCount = WRAP_HEX_COUNT_BASE * (WRAP_BASE_TIER_KM / sizeKm);
+  const qMin = -Math.floor(wrapHexCount / 2);
+  const qMax = qMin + wrapHexCount - 1;
 
-  // Justin 2026-04-26 "alaska, russia bị cắt" lằn xéo. Root cause: axial hex
-  // y = SQRT_3 × size × (r + q/2). Fixed r range độc lập q tạo parallelogram
-  // sheared coverage → ở q âm cực (lng −180°), max lat phủ chỉ tới ~53°N.
-  // Fix: r range PER q sao cho mỗi cột q phủ đủ y ∈ [minMercY, maxMercY].
+  // Shear fix: r range PER q sao cho mỗi cột q phủ đủ y ∈ [minMercY, maxMercY].
   const rBaseLo = minMercY / vertSpacing;
   const rBaseHi = maxMercY / vertSpacing;
 
@@ -363,9 +383,12 @@ function bakeTier(
     const rHi = Math.ceil(rBaseHi - halfQ) + 1;
     for (let r = rLo; r <= rHi; r++) {
       const [mx, my] = axialToMercator(q, r, sizeRad);
-      if (mx < minMercX || mx > maxMercX) continue;
       if (my < minMercY || my > maxMercY) continue;
-      const [lng, lat] = mercatorToLngLat(mx, my);
+      let [lng, lat] = mercatorToLngLat(mx, my);
+      // Wrap lng to [-180, 180] for PiP — q at extreme columns may give
+      // mercX > π / < -π (those hexes belong to wrap-copies geographically).
+      if (lng > 180) lng -= 360;
+      else if (lng < -180) lng += 360;
       total++;
       const countryId = lookupCountry(lng, lat, bush, countriesById);
       if (countryId === 0) { oceanSkipped++; continue; }

@@ -13,6 +13,7 @@ import { loadCountries } from './data/countries';
 import { loadTier } from './data/tiers';
 import { buildColorLut } from './render/colors';
 import { pickTier } from './render/lod';
+import { WRAP_DISTANCE_PX } from './geo/projection';
 
 async function bootstrap(): Promise<void> {
   performance.mark('boot-start');
@@ -124,11 +125,10 @@ async function bootstrap(): Promise<void> {
     }, 250);
   };
 
-  // Justin 2026-04-26 "move qua trái phải cuộn nối nhau": world wrap.
-  // hexLayer renders 3 copies at offsets [-W, 0, +W]. After user pans across
-  // antimeridian, snap viewport.center.x by ±W invisibly (visible content
-  // identical). Re-entrancy guard so moveCenter() doesn't recurse 'moved'.
-  const WORLD_W = 2 * Math.PI * 1024;
+  // World wrap — wrap distance match hex pitch alignment (projection.ts).
+  // Snap viewport.center.x by ±W when |cx| > W/2 → invisible because hexLayer
+  // renders identical content at ±W offsets (coarse tiers only).
+  const WORLD_W = WRAP_DISTANCE_PX;
   let wrapping = false;
   const wrapCenter = (): void => {
     if (wrapping) return;

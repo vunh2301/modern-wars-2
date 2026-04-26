@@ -35,6 +35,22 @@ export function kmToWorldPx(km: number): number {
   return (km / EARTH_R_KM) * WORLD_SCALE_PX;
 }
 
+/**
+ * Wrap distance for horizontal world repetition. Justin 2026-04-26 "điểm nối
+ * map bị cắt 1 lằn → cho nó sát vô".
+ *
+ * Naive W = 2π × WORLD_SCALE_PX không chia hết cho hex pitch → wrap copies
+ * lệch subpixel ↔ visible seam. Fix: snap W xuống bội số gần nhất của
+ * 50km hex pitch (mọi tier khác là chia chẵn của 50km, nên seamless mọi LOD).
+ */
+export const WRAP_BASE_TIER_KM = 50;
+export const WRAP_HEX_COUNT_BASE: number = (() => {
+  const pitchBaseRad = 1.5 * (WRAP_BASE_TIER_KM / EARTH_R_KM);
+  return Math.round((2 * Math.PI) / pitchBaseRad);
+})();
+export const WRAP_DISTANCE_PX: number =
+  WRAP_HEX_COUNT_BASE * 1.5 * kmToWorldPx(WRAP_BASE_TIER_KM);
+
 /** World total bounds in pixels (Mercator clamped at ±MAX_LAT). Y inverted for screen-down. */
 export function worldBoundsPx(): { minX: number; minY: number; maxX: number; maxY: number; width: number; height: number } {
   const minX = -Math.PI * WORLD_SCALE_PX;

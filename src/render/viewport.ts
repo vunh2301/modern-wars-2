@@ -25,8 +25,9 @@ export function createViewport(app: Application): Viewport {
     .pinch()
     .wheel()
     .decelerate({ friction: 0.93 })
-    // Justin 2026-04-26: minScale 0.20× (was 0.05). Initial fit clamps up.
-    .clampZoom({ minScale: 0.20, maxScale: 32 });
+    // Justin 2026-04-26: minScale 0.20× (was 0.05); maxScale 8× (was 32) —
+    // các tier ≤ 5km chưa bake, zoom > 8 nhồi 10km tier crash iPhone.
+    .clampZoom({ minScale: 0.20, maxScale: 8 });
 
   return viewport;
 }
