@@ -64,42 +64,20 @@ export function resizeViewport(app: Application, viewport: Viewport): void {
 }
 
 /**
- * Phase 6.7: Infinite horizontal wrap. Snap viewport.center.x vào canonical
- * range [-W/2, +W/2] khi user pan vượt biên — invisible (visual identical
- * vì hex grid wrap-instance copies fill seamlessly).
+ * Phase 6.7 + Hotfix 2026-04-26: Infinite horizontal wrap.
  *
- * Hotfix 2026-04-26 (Justin iPhone test): trước đây snap fire trên 'moved'
- * EVENT (continuous during drag/decelerate). pixi-viewport drag plugin track
- * pointer delta nội bộ — moveCenter mid-drag breaks delta calculation →
- * screen "giật ngược" + map mất. Fix: chỉ snap trên 'moved-end' (sau khi
- * drag + decelerate hoàn tất). Wrap-instance copies trong rbush (offsets
- * [-W, 0, +W]) đã cover khi user pan past seam → không thấy empty area
- * trong lúc đang kéo. Snap silent trên release.
+ * Approach: viewport.center.x is NEVER snapped (no jump, drag plugin
+ * unaffected). Instead, hexLayer's updateVisibility computes a wrapShift
+ * (floor((cx) / W) * W) and renders chunk meshes at offsetX + wrapShift so
+ * they cover viewport's actual world position regardless of drift.
  *
- * Y vẫn clamp (Mercator chỉ wrap longitude). Reuse pixi-viewport's intrinsic
- * Y bounds via worldHeight in createViewport.
+ * Result: user can fast-fling map sang trái/phải vô hạn — wrap copies
+ * always in viewport. No visible jump. No "map mất" symptom.
+ *
+ * This function previously snapped viewport position; now it's a no-op
+ * (kept for API compat — main.ts still calls). Y bounds via createViewport.
  */
-export function enableInfiniteWrap(viewport: Viewport): void {
-  const W = WRAP_DISTANCE_PX;
-  const HALF_W = W / 2;
-  let snapping = false;
-
-  const trySnap = (): void => {
-    if (snapping) return;
-    const cx = viewport.center.x;
-    if (cx > HALF_W) {
-      snapping = true;
-      viewport.moveCenter(cx - W, viewport.center.y);
-      snapping = false;
-    } else if (cx < -HALF_W) {
-      snapping = true;
-      viewport.moveCenter(cx + W, viewport.center.y);
-      snapping = false;
-    }
-  };
-
-  // ONLY snap on 'moved-end' — fired after drag + decelerate complete.
-  // 'moved' (continuous during drag) DELIBERATELY NOT handled — would
-  // interrupt drag plugin's pointer-delta tracking and cause visible jump.
-  viewport.on('moved-end', trySnap);
+export function enableInfiniteWrap(_viewport: Viewport): void {
+  // Intentional no-op — wrap rendering handled in hexLayer.updateVisibility.
+  void _viewport;
 }

@@ -103,6 +103,11 @@ export function createMeshHexLayer(app: Application): MeshHexLayer {
   let currentBorderWidth = 0;
   let bordersVisible = true;
   let abortController = new AbortController();
+  // Hotfix 2026-04-26 (Justin iPhone fast-pan/zoom test): viewport.center.x
+  // can drift far past ±W/2 during fast drag/decelerate/pinch. Instead of
+  // snapping viewport (caused mid-drag jumps), shift mesh positions to track
+  // viewport's actual world position. Updated each updateVisibility cull.
+  let currentWrapShift = 0;
 
   const meshByKey = new Map<string, Mesh<Geometry, Shader>>();
   const bordersByKey = new Map<string, Graphics>();
@@ -187,14 +192,16 @@ export function createMeshHexLayer(app: Application): MeshHexLayer {
 
     const mesh = new Mesh<Geometry, Shader>({ geometry: geom, shader });
     mesh.label = `mesh-${key}`;
-    mesh.x = offsetX;
+    mesh.x = offsetX + currentWrapShift;
     mesh.cullable = false;
 
-    // Borders (Graphics overlay) — same data as Phase 6
+    // Borders (Graphics overlay) — same data as Phase 6.
+    // Edges baked with offsetX inline; g.x adds currentWrapShift.
     const g = new Graphics();
     g.label = `borders-${key}`;
     g.cullable = false;
     g.visible = bordersVisible;
+    g.x = currentWrapShift;
     const edges = buffers.edgeBuffer;
     for (let i = 0; i < edges.length; i += 4) {
       g.moveTo(edges[i]! + offsetX, edges[i + 1]!)
@@ -350,14 +357,23 @@ export function createMeshHexLayer(app: Application): MeshHexLayer {
     const t0 = performance.now();
     performance.mark('cull-query-start');
 
+    // Hotfix: compute wrapShift = nearest multiple of W to viewport center.
+    // Then normalize bbox into canonical range for rbush query, and shift
+    // mesh positions by wrapShift on render so they cover viewport's actual
+    // world position. Lets viewport drift arbitrarily far without losing map.
+    const cx = (bbox.minX + bbox.maxX) / 2;
+    currentWrapShift = Math.round(cx / WRAP_DISTANCE_PX) * WRAP_DISTANCE_PX;
+    const normMinX = bbox.minX - currentWrapShift;
+    const normMaxX = bbox.maxX - currentWrapShift;
+
     // 1-chunk margin (Phase 6 D-5) — covers cross-chunk borders + flicker.
     const sample = rbush.all()[0];
     const chunkW = sample ? sample.maxX - sample.minX : 0;
     const chunkH = sample ? sample.maxY - sample.minY : 0;
     const expanded = {
-      minX: bbox.minX - chunkW,
+      minX: normMinX - chunkW,
       minY: bbox.minY - chunkH,
-      maxX: bbox.maxX + chunkW,
+      maxX: normMaxX + chunkW,
       maxY: bbox.maxY + chunkH,
     };
 
@@ -374,26 +390,34 @@ export function createMeshHexLayer(app: Application): MeshHexLayer {
       if (g) g.visible = false;
     }
 
-    // Show entries that entered viewport.
+    // Show entries that entered viewport. Always set mesh.x + g.x to track
+    // currentWrapShift (cheap; Pixi caches dirty internally).
     for (const e of nowEntries) {
       const cacheKey = `${currentTierName}:${e.chunkId}`;
-      const m = meshByKey.get(e.key);
+      let m = meshByKey.get(e.key);
+      if (!m) {
+        // Try CPU cache first
+        const cached = chunkCache.get(cacheKey);
+        if (cached) {
+          stats.cacheHits++;
+          buildMesh(e.key, cached, e.offsetX);
+          evictIfNeeded();
+          m = meshByKey.get(e.key);
+        } else {
+          // Fully cold — issue async fetch (mounts on completion if still visible).
+          fetchAndMount(e.key, e.manifestEntry, e.offsetX);
+          continue; // mesh not yet available this frame
+        }
+      }
       if (m) {
         m.visible = true;
+        m.x = e.offsetX + currentWrapShift;
         const g = bordersByKey.get(e.key);
-        if (g) g.visible = bordersVisible;
-        continue;
+        if (g) {
+          g.visible = bordersVisible;
+          g.x = currentWrapShift;
+        }
       }
-      // Mesh not built — try CPU cache first.
-      const cached = chunkCache.get(cacheKey);
-      if (cached) {
-        stats.cacheHits++;
-        buildMesh(e.key, cached, e.offsetX);
-        evictIfNeeded();
-        continue;
-      }
-      // Fully cold — issue async fetch (mounts on completion if still visible).
-      fetchAndMount(e.key, e.manifestEntry, e.offsetX);
     }
 
     visibleSet = nowSet;
