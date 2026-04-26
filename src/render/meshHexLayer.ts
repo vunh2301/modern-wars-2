@@ -45,6 +45,11 @@ const WRAP_OFFSETS: ReadonlyArray<number> = [-WRAP_DISTANCE_PX, 0, WRAP_DISTANCE
 // once. LRU cap raised 24→48 so eviction never starves visible set.
 // Memory cost: ~48 × ~5 MB / Pixi instance ≈ 240 MB GPU buffers (under cap).
 const MAX_BUILT_INSTANCES = 48;
+// Phase 7.9 (2026-04-26): chunkCache decoupled from GPU mesh cap. CPU
+// ChunkBuffers are cheap (~50KB each), 256 × 50KB ≈ 13MB. Cross-tier
+// cache key = `${tier}:${chunkId}` — prefetch warm cache for adjacent
+// tiers (eliminate cold-cache flash on zoom in/out).
+const MAX_CHUNK_CACHE = 256;
 
 const BORDER_COLOR = 0x05101a;
 const BORDER_ALPHA = 0.85;
@@ -76,6 +81,8 @@ export interface MeshHexLayer {
   setBordersVisible(visible: boolean): void;
   updateVisibility(bbox: ViewportBbox): void;
   getStats(): MeshHexLayerStats;
+  /** Phase 7.9: best-effort warm cache for adjacent tier (idle-paced fetch). */
+  prefetchTier(tierName: string, signal?: AbortSignal): Promise<void>;
   destroy(): void;
 }
 
@@ -98,7 +105,7 @@ export function createMeshHexLayer(app: Application): MeshHexLayer {
   root.cullable = false;
 
   const shader: Shader = createHexShader();
-  const chunkCache = new ChunkCache(MAX_BUILT_INSTANCES);
+  const chunkCache = new ChunkCache(MAX_CHUNK_CACHE);
 
   let manifest: ChunksManifest | null = null;
   let rbush: HexRBush = new HexRBush();
@@ -114,6 +121,12 @@ export function createMeshHexLayer(app: Application): MeshHexLayer {
 
   const meshByKey = new Map<string, Mesh<Geometry, Shader>>();
   const bordersByKey = new Map<string, Graphics>();
+  // Phase 7.9 (A): tier-overlap "graveyard". On setTier, current meshes/borders
+  // remain mounted until new tier covers viewport (xem updateVisibility) hoặc
+  // safety timer 1500ms. Prevents cold-cache flash khi user zoom in lần đầu.
+  let oldTierMeshes: Mesh<Geometry, Shader>[] = [];
+  let oldTierBorders: Graphics[] = [];
+  let oldTierClearTimer: ReturnType<typeof setTimeout> | null = null;
   /** Per-render-instance loading state — distinguishes "this (chunk, offset) is awaiting mount". */
   const inFlight = new Set<string>();
   /** Per-CHUNK-FILE in-flight promises — dedupes fetch across wrap-instance offsets. Codex-review HIGH fix. */
@@ -129,6 +142,19 @@ export function createMeshHexLayer(app: Application): MeshHexLayer {
     const geom = m.geometry;
     m.destroy({ children: true });
     geom.destroy(true);
+  };
+
+  // Phase 7.9 (A): sweep tier-overlap graveyard once new tier rendered.
+  const clearOldTier = (): void => {
+    if (oldTierClearTimer !== null) {
+      clearTimeout(oldTierClearTimer);
+      oldTierClearTimer = null;
+    }
+    if (oldTierMeshes.length === 0 && oldTierBorders.length === 0) return;
+    for (const m of oldTierMeshes) destroyMesh(m);
+    for (const g of oldTierBorders) g.destroy();
+    oldTierMeshes = [];
+    oldTierBorders = [];
   };
 
   const stats: MeshHexLayerStats = {
@@ -301,19 +327,27 @@ export function createMeshHexLayer(app: Application): MeshHexLayer {
     abortController.abort();
     abortController = new AbortController();
 
-    // Tear down current meshes + borders. BLOCKER fix: explicit geom.destroy.
-    for (const m of meshByKey.values()) destroyMesh(m);
-    for (const g of bordersByKey.values()) g.destroy();
+    // Phase 7.9 (A): KEEP current meshes/borders mounted as "graveyard" — old
+    // tier render stays visible while new tier loads. Sweep on first frame
+    // where new tier covers viewport (updateVisibility), or 1500ms safety.
+    // Replaces old "destroy-then-load" path that caused cold-cache flash.
+    clearOldTier(); // sweep stale graveyard from chained switches.
+    oldTierMeshes = Array.from(meshByKey.values());
+    oldTierBorders = Array.from(bordersByKey.values());
+
     meshByKey.clear();
     bordersByKey.clear();
     builtOrder.length = 0;
     visibleSet = new Set();
     inFlight.clear();
     inFlightByCache.clear();
-    chunkCache.clear();
+    // Phase 7.9 (C): chunkCache giữ cross-tier (key bao tierName, không
+    // collision). Cho phép prefetch warm cache trước cho tier kế.
     stats.builtChunks = 0;
     stats.visibleChunks = 0;
     stats.inFlight = 0;
+
+    oldTierClearTimer = setTimeout(clearOldTier, 1500);
 
     if (!manifest) manifest = await loadChunksManifest();
     const tier = manifest.tiers[tierName];
@@ -433,6 +467,17 @@ export function createMeshHexLayer(app: Application): MeshHexLayer {
     }
 
     visibleSet = nowSet;
+
+    // Phase 7.9 (A): tier-overlap sweep. Once new tier mesh-instances cover
+    // every visible key, drop the graveyard mounted from previous tier.
+    if (oldTierMeshes.length > 0 && nowEntries.length > 0) {
+      let allBuilt = true;
+      for (const k of visibleSet) {
+        if (!meshByKey.has(k)) { allBuilt = false; break; }
+      }
+      if (allBuilt) clearOldTier();
+    }
+
     stats.visibleChunks = nowEntries.length;
     stats.lastCullMs = performance.now() - t0;
     performance.mark('cull-query-end');
@@ -441,6 +486,43 @@ export function createMeshHexLayer(app: Application): MeshHexLayer {
 
   const getStats = (): MeshHexLayerStats => ({ ...stats });
 
+  // Phase 7.9 (C): warm-cache prefetch cho 1 tier. Idle-paced (yields between
+  // fetches via requestIdleCallback). Dùng signal RIÊNG (warmAbortController
+  // ở main.ts) — KHÔNG share với main fetch's abortController. Nếu user
+  // chuyển tier, main.ts abort prefetch độc lập. Best-effort: silent on error.
+  const prefetchTier = async (tierName: string, signal?: AbortSignal): Promise<void> => {
+    if (!manifest) manifest = await loadChunksManifest();
+    const tier = manifest.tiers[tierName];
+    if (!tier) return;
+    let warmed = 0;
+    for (const entry of tier.chunks) {
+      if (signal?.aborted) return;
+      const cacheKey = `${tierName}:${entry.id}`;
+      if (chunkCache.has(cacheKey)) continue;
+
+      // Yield to main thread between fetches (don't compete với active render).
+      await new Promise<void>((r) => {
+        const w = window as unknown as {
+          requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => void;
+        };
+        if (w.requestIdleCallback) w.requestIdleCallback(() => r(), { timeout: 500 });
+        else setTimeout(r, 50);
+      });
+      if (signal?.aborted) return;
+
+      try {
+        const buffers = await loadChunk(entry, signal);
+        if (signal?.aborted) return;
+        chunkCache.set(cacheKey, buffers);
+        warmed++;
+      } catch (err) {
+        if (err instanceof DOMException && err.name === 'AbortError') return;
+        // Best-effort prefetch — silent on transient errors.
+      }
+    }
+    if (warmed > 0) console.info(`[mesh-hex] prefetch ${tierName}: warmed ${warmed} chunks (cache size ${chunkCache.size})`);
+  };
+
   const destroy = (): void => {
     abortController.abort();
     // BLOCKER fix: explicit geom.destroy on every mesh.
@@ -448,11 +530,12 @@ export function createMeshHexLayer(app: Application): MeshHexLayer {
     for (const g of bordersByKey.values()) g.destroy();
     meshByKey.clear();
     bordersByKey.clear();
+    clearOldTier(); // Phase 7.9 (A): sweep graveyard on layer destroy.
     inFlightByCache.clear();
     chunkCache.clear();
     shader.destroy();
     root.destroy({ children: true });
   };
 
-  return { root, setTier, setBordersVisible, updateVisibility, getStats, destroy };
+  return { root, setTier, setBordersVisible, updateVisibility, getStats, prefetchTier, destroy };
 }

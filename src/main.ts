@@ -45,6 +45,8 @@ interface UnifiedHexLayer {
   setBordersVisible(visible: boolean): void;
   updateVisibility(bbox: ViewportBbox): void;
   getStats(): { visibleChunks: number; builtChunks: number; totalChunks: number; lastBuildMs: number; lastCullMs: number; lastTierSwitchMs: number };
+  /** Phase 7.9 (C): warm adjacent tier cache (mesh engine only; particles no-op). */
+  prefetchTier?: (tierName: string, signal?: AbortSignal) => Promise<void>;
   destroy(): void;
 }
 
@@ -128,7 +130,38 @@ async function bootstrap(): Promise<void> {
   const initialSizeKm = manifest.tiles[initialTier]?.sizeKm ?? 50;
   await hexLayer.setTier(initialTier, initialSizeKm);
 
+  // Phase 7.9 FPS unlock: explicit cap-off (Pixi default 0 nhưng để rõ ràng).
+  // 60fps trên iPhone là cap iOS Safari (mặc định ProMotion off cho web). FPS
+  // 120 unlock bằng iOS Settings > Accessibility > Motion > Limit Frame Rate (off).
+  app.ticker.maxFPS = 0;
+  app.ticker.minFPS = 30;
+
   fitViewportToWorld(viewport, app);
+
+  // Phase 7.9 (C): warm cache cho adjacent tiers (next-finer + next-coarser).
+  // Chunks load idle-paced, không compete với active render. Khi user zoom →
+  // tier switch, chunkCache đã warm → cache hit → instant build → no flash.
+  const TIER_ORDER: ReadonlyArray<string> = ['50km', '25km', '10km', '5km', '2km', '1km'];
+  let warmAbortController = new AbortController();
+  const warmAdjacentTiers = (current: string): void => {
+    if (!hexLayer.prefetchTier) return;
+    warmAbortController.abort();
+    warmAbortController = new AbortController();
+    const sig = warmAbortController.signal;
+    const idx = TIER_ORDER.indexOf(current);
+    if (idx < 0) return;
+    const queue: string[] = [];
+    if (TIER_ORDER[idx + 1] && availableTiers.has(TIER_ORDER[idx + 1]!)) queue.push(TIER_ORDER[idx + 1]!);
+    if (TIER_ORDER[idx - 1] && availableTiers.has(TIER_ORDER[idx - 1]!)) queue.push(TIER_ORDER[idx - 1]!);
+    if (TIER_ORDER[idx + 2] && availableTiers.has(TIER_ORDER[idx + 2]!)) queue.push(TIER_ORDER[idx + 2]!);
+    void (async () => {
+      for (const t of queue) {
+        if (sig.aborted) return;
+        try { await hexLayer.prefetchTier!(t, sig); } catch { /* best-effort */ }
+      }
+    })();
+  };
+  warmAdjacentTiers(initialTier);
 
   // Phase 6: viewport-based chunk culling. cullNow() fires synchronously so
   // first frame after setTier renders only visible chunks (no blank flash).
@@ -225,6 +258,8 @@ async function bootstrap(): Promise<void> {
           // Phase 6: re-cull immediately for new tier so first post-switch
           // frame already shows visible chunks (else 1-frame blank flash).
           cullNow();
+          // Phase 7.9 (C): warm cache cho tier kế của tier mới.
+          warmAdjacentTiers(next);
           benchmark.recordTierSwitch(fromTier, next, hexLayer.getStats().lastTierSwitchMs);
           w.__mwTier = currentTier;
           w.__mwHexCount = manifest.tiles[next]?.hexCount ?? 0;
