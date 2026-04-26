@@ -211,14 +211,15 @@ swaps without changing call sites.
 
 ### 4.3 Queue backpressure
 
-- `maxQueueDepth = 2 × poolSize` (default 8 for production, 4 workers × 2).
+- `maxQueueDepth = 16 × poolSize` (default 64 for production, 4 workers × 16).
+  Sized for 48 visible chunks × 3 wrap copies burst (Phase 8.7 iter 1 fix).
 - When queue full: `dispatch()` throws `QueueFullError` synchronously (before returning Promise).
 - chunks.ts catches QueueFullError: logs warn, returns rejected Promise to upstream.
 - meshHexLayer's `fetchAndMount` catches QueueFullError → adds chunk key to `retryNextCull` Set.
 - **Static-viewport retry driver**: when `retryNextCull.size` was 0 before adding first key,
   schedule one-shot `requestAnimationFrame(() => cullNow())`. Guard flag `retryRafScheduled`
   prevents multiple rAF in-flight. Next cullNow drains retryNextCull, clears flag.
-- Bench scenario 4 (1000 decode jobs) uses `maxQueueDepth: 2048` or batched dispatch (50 at a time).
+- Bench scenario 4 (1000 decode jobs) stresses the pool sequentially via `forceWorkerStress(1000)`.
 
 ### 4.4 Warmup vs lazy spawn
 
