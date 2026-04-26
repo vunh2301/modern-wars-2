@@ -132,28 +132,31 @@ export function parseChunkBinary(buf: ArrayBuffer, entry: ChunkManifestEntry): C
     throw new Error(`${entry.file}: hexCount ${hexCount} ≠ manifest ${entry.hexCount}`);
   }
 
-  // Codex-review HIGH fix: zero-copy views over the decompressed buffer
-  // (was ArrayBuffer.slice() = deep copy → 3× transient alloc per chunk).
+  // Phase 7.8 fix: Pixi v8 WebGPU fastCopy assumes `buffer.data.buffer` matches
+  // descriptor.size. Zero-copy views vào underlying `buf` cause RangeError
+  // ("Invalid typed array length: N") khi destination GPUBuffer chỉ rộng bằng
+  // view nhưng fastCopy tính `lengthDouble = underlying.byteLength / 8`.
+  // Per-attribute fresh ArrayBuffer (TypedArray.slice() = copy + new backing).
 
   // Template (48 B): 6 verts × (x:f32, y:f32) pre-scaled
   const templateOffset = HEADER_SIZE;
-  const templateBuffer = new Uint8Array(buf, templateOffset, TEMPLATE_BYTES);
+  const templateBuffer = new Uint8Array(buf, templateOffset, TEMPLATE_BYTES).slice();
 
   // Instance buffer (hex_count × 12 B)
   const instanceOffset = templateOffset + TEMPLATE_BYTES;
   const instanceBytes = hexCount * 12;
-  const instanceBuffer = new Uint8Array(buf, instanceOffset, instanceBytes);
+  const instanceBuffer = new Uint8Array(buf, instanceOffset, instanceBytes).slice();
 
   // Static index (48 B = 12 uint32, shared fan triangulation)
   const indexOffset = instanceOffset + instanceBytes;
-  const indexBuffer = new Uint32Array(buf, indexOffset, INDEX_BYTES / 4);
+  const indexBuffer = new Uint32Array(buf, indexOffset, INDEX_BYTES / 4).slice();
 
   // Edge prefix + edges
   const edgePrefixOffset = indexOffset + INDEX_BYTES;
   const edgeCount = view.getUint32(edgePrefixOffset, true);
   const edgeOffset = edgePrefixOffset + 4;
   const edgeBytes = edgeCount * 16;
-  const edgeBuffer = new Float32Array(buf, edgeOffset, edgeBytes / 4);
+  const edgeBuffer = new Float32Array(buf, edgeOffset, edgeBytes / 4).slice();
 
   // Footer
   const footerOffset = edgeOffset + edgeBytes;
