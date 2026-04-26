@@ -20,6 +20,19 @@ import { loadTier } from './data/tiers';
 import { buildColorLut } from './render/colors';
 import { pickTier } from './render/lod';
 
+/** Coalesce repeated calls to next requestAnimationFrame tick. Trailing dispatch. */
+function throttleRaf(fn: () => void): () => void {
+  let scheduled = false;
+  return () => {
+    if (scheduled) return;
+    scheduled = true;
+    requestAnimationFrame(() => {
+      scheduled = false;
+      fn();
+    });
+  };
+}
+
 async function bootstrap(): Promise<void> {
   performance.mark('boot-start');
 
@@ -56,6 +69,20 @@ async function bootstrap(): Promise<void> {
   applyPanClampForTier(initialTier);
 
   fitViewportToWorld(viewport, app);
+
+  // Phase 6: viewport-based chunk culling. cullNow() fires synchronously so
+  // first frame after setTier renders only visible chunks (no blank flash).
+  const cullNow = (): void => {
+    const r = viewport.getVisibleBounds();
+    hexLayer.updateVisibility({
+      minX: r.x,
+      minY: r.y,
+      maxX: r.x + r.width,
+      maxY: r.y + r.height,
+    });
+  };
+  const updateVisibleChunks = throttleRaf(cullNow);
+  cullNow();
 
   // Resize handler
   window.addEventListener('resize', () => resizeViewport(app, viewport), { passive: true });
@@ -94,6 +121,7 @@ async function bootstrap(): Promise<void> {
     // pixi-viewport.setZoom() không emit 'zoomed' (chỉ user-driven mới emit).
     // Fire manually để LOD switcher pick up tier change cho headless test.
     viewport.emit('zoomed', { type: 'animate', viewport });
+    cullNow(); // sync cull — headless tests screenshot before rAF fires
   };
   w.__mwCenterOn = (lng: number, lat: number): void => {
     // Mercator → world px (Y-negated for screen-down).
@@ -101,7 +129,10 @@ async function bootstrap(): Promise<void> {
     const latClamp = Math.max(-85, Math.min(85, lat));
     const yMerc = Math.log(Math.tan(Math.PI / 4 + (latClamp * Math.PI) / 360));
     viewport.moveCenter(lngRad * 1024, -yMerc * 1024);
+    cullNow();
   };
+  w.__mwCullNow = cullNow;
+  w.__mwHexLayer = hexLayer;
 
   const updateHud = (): void => {
     w.__mwZoom = viewport.scale.x;
@@ -127,6 +158,9 @@ async function bootstrap(): Promise<void> {
           currentTier = next;
           hexLayer.setTier(td, lut);
           applyPanClampForTier(currentTier);
+          // Phase 6: re-cull immediately for new tier so first post-switch
+          // frame already shows visible chunks (else 1-frame blank flash).
+          cullNow();
           w.__mwTier = currentTier;
           w.__mwHexCount = td.hexes.length;
           console.info(`[lod] → ${next} at zoom ${viewport.scale.x.toFixed(2)}`);
@@ -142,8 +176,12 @@ async function bootstrap(): Promise<void> {
   viewport.on('zoomed', () => {
     updateHud();
     maybeSwitchLod();
+    updateVisibleChunks();
   });
-  viewport.on('moved', updateHud);
+  viewport.on('moved', () => {
+    updateHud();
+    updateVisibleChunks();
+  });
 
   // FPS sampler — Pixi Application.ticker.FPS already smoothed.
   w.__mwApp = app;
