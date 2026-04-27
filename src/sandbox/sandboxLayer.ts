@@ -1,0 +1,93 @@
+/**
+ * Sandbox hex layer — single Mesh wrapping 64×64 synthetic grid.
+ *
+ * Bypass tier/chunk/manifest infrastructure. Direct render path để iterate
+ * texture / shader experiments rất nhanh (no CDN, no LRU, no LOD).
+ *
+ * Reuse hexShader.ts — identical attribute layout (aTemplate vec2 +
+ * aInstancePos vec2 + aInstanceColor unorm8x4).
+ */
+import 'pixi.js/mesh';
+import {
+  Buffer as PixiBuffer,
+  BufferUsage,
+  Container,
+  Geometry,
+  Mesh,
+  type Application,
+  type Shader,
+} from 'pixi.js';
+import { createHexShader } from '../render/hexShader';
+import { generateSandboxData } from './sandboxData';
+
+export interface SandboxLayer {
+  root: Container;
+  hexCount: number;
+  bounds: { minX: number; minY: number; maxX: number; maxY: number };
+  destroy(): void;
+}
+
+export function createSandboxLayer(
+  _app: Application,
+  rows = 64,
+  cols = 64,
+  seed = 1,
+): SandboxLayer {
+  const root = new Container();
+  root.label = 'sandbox-hex-layer';
+  root.cullable = false;
+
+  const shader: Shader = createHexShader();
+  const data = generateSandboxData(rows, cols, seed);
+
+  const templateBuf = new PixiBuffer({
+    data: data.templateBuffer,
+    usage: BufferUsage.VERTEX | BufferUsage.COPY_DST,
+  });
+  const instanceBuf = new PixiBuffer({
+    data: data.instanceBuffer,
+    usage: BufferUsage.VERTEX | BufferUsage.COPY_DST,
+  });
+  const indexBuf = new PixiBuffer({
+    data: data.indexBuffer,
+    usage: BufferUsage.INDEX | BufferUsage.COPY_DST,
+  });
+
+  const geom = new Geometry({
+    attributes: {
+      aTemplate: { buffer: templateBuf, format: 'float32x2', offset: 0, stride: 8 },
+      aInstancePos: { buffer: instanceBuf, format: 'float32x2', offset: 0, stride: 12, instance: true },
+      aInstanceColor: { buffer: instanceBuf, format: 'unorm8x4', offset: 8, stride: 12, instance: true },
+    },
+    indexBuffer: indexBuf,
+    topology: 'triangle-list',
+    instanceCount: data.hexCount,
+  });
+
+  const mesh = new Mesh<Geometry, Shader>({ geometry: geom, shader });
+  mesh.label = 'sandbox-mesh';
+  mesh.cullable = false;
+
+  // Mesh<Geometry, Shader> generics confuse Container.addChild overload (giống
+  // pattern trong meshHexLayer.ts). Runtime Pixi accept any Container child.
+  root.addChild(mesh as unknown as Container);
+
+  // Bounds approximation: 64×64 cells, hex pitch 1.5 × kmToWorldPx(25).
+  // Actual = computed from instances but estimate đủ cho fitViewport.
+  const halfX = (cols / 2) * 1.5 * 4; // ~4px per 25km hex inradius
+  const halfY = (rows / 2) * Math.sqrt(3) * 4;
+
+  const destroy = (): void => {
+    mesh.destroy({ children: true });
+    geom.destroy(true);
+    shader.destroy();
+    root.destroy({ children: true });
+  };
+
+  return {
+    root,
+    hexCount: data.hexCount,
+    bounds: { minX: -halfX, minY: -halfY, maxX: halfX, maxY: halfY },
+    destroy,
+  };
+}
