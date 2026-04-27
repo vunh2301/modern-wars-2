@@ -1,8 +1,8 @@
 /**
- * Sandbox synthetic data — 64×64 hex grid với 3 random country regions ở giữa.
+ * Sandbox synthetic data — 64×64 hex grid với terrain generation.
  *
- * Mục tiêu: test bed cho texture / shader experiments. Không cần CDN fetch,
- * không tier switching, không LOD logic. Render trực tiếp 1 mesh duy nhất.
+ * Mục tiêu: test bed cho texture / shader experiments + terrain palette test.
+ * Bypass tier/chunk/manifest infrastructure entirely.
  *
  * Format match MWCK v2 instance shape (cx:f32, cy:f32, RGBA:u8×4) để dùng
  * chung shader (createHexShader).
@@ -29,22 +29,35 @@ const FAN_INDICES = new Uint32Array([
   0, 4, 5,
 ]);
 
-const NEUTRAL_COLOR: readonly [number, number, number, number] = [40, 60, 80, 255]; // ocean dark blue
+// ─── Terrain palette ──────────────────────────────────────────────────────────
+// 6 terrain types cho modern war RTS world map. RGB tuple + future gameplay.
+type RGBA = readonly [number, number, number, number];
 
-interface RegionSpec {
-  centerCol: number;
-  centerRow: number;
-  radius: number;
-  color: readonly [number, number, number, number];
+export const enum Terrain {
+  Ocean = 0,    // deep water, impassable land, naval only
+  Coast = 1,    // shallow water, amphibious assault zone
+  Plains = 2,   // open, fast move, no defense bonus
+  Forest = 3,   // slow move, +25% defense, blocks LOS
+  Mountain = 4, // very slow, +50% defense, naturally fortified
+  Urban = 5,    // city blocks, +40% defense, controllable
 }
 
-/** Generate 64×64 hex grid với 3 country regions colored random in middle. */
+const TERRAIN_COLORS: Record<Terrain, RGBA> = {
+  [Terrain.Ocean]:    [14, 33, 64, 255],   // #0e2140 deep blue
+  [Terrain.Coast]:    [30, 69, 112, 255],  // #1e4570 lighter blue
+  [Terrain.Plains]:   [156, 138, 85, 255], // #9c8a55 khaki-green
+  [Terrain.Forest]:   [46, 94, 44, 255],   // #2e5e2c dark green
+  [Terrain.Mountain]: [110, 94, 84, 255],  // #6e5e54 gray-brown
+  [Terrain.Urban]:    [74, 74, 74, 255],   // #4a4a4a dark gray
+};
+
+// ─── Generator ────────────────────────────────────────────────────────────────
+
+/** Generate hex grid với terrain noise. */
 export function generateSandboxData(rows = 64, cols = 64, seed = 1): SandboxBuffers {
   const sizeWorldPx = kmToWorldPx(TIER_KM);
 
-  // Template: 6 vertices around hex center, FLAT-TOP orientation (match main map).
-  // Vertices at 0°, 60°, 120°, 180°, 240°, 300° → top edge ngang (vertex 1+2),
-  // chóp nhọn ở left/right (vertex 0, 3). Match production main map layout.
+  // Template: 6 vertices around hex center, FLAT-TOP orientation (match main).
   const template = new Float32Array(12);
   for (let i = 0; i < 6; i++) {
     const angle = (Math.PI / 3) * i;
@@ -56,39 +69,18 @@ export function generateSandboxData(rows = 64, cols = 64, seed = 1): SandboxBuff
   const instances = new ArrayBuffer(hexCount * 12);
   const instView = new DataView(instances);
 
+  // Generate terrain map (2 noise layers: elevation + moisture).
+  const terrainMap = generateTerrainMap(rows, cols, seed);
+
   const halfC = Math.floor(cols / 2);
   const halfR = Math.floor(rows / 2);
-  const rng = mulberry32(seed);
-
-  // 3 random country regions ở giữa map (small jitter quanh center).
-  const regions: RegionSpec[] = [
-    {
-      centerCol: halfC + Math.floor((rng() - 0.5) * 8),
-      centerRow: halfR + Math.floor((rng() - 0.5) * 8),
-      radius: 8,
-      color: [220, 80, 80, 255],   // red
-    },
-    {
-      centerCol: halfC + Math.floor((rng() - 0.5) * 14),
-      centerRow: halfR + Math.floor((rng() - 0.5) * 14),
-      radius: 6,
-      color: [80, 200, 100, 255],  // green
-    },
-    {
-      centerCol: halfC + Math.floor((rng() - 0.5) * 14),
-      centerRow: halfR + Math.floor((rng() - 0.5) * 14),
-      radius: 6,
-      color: [100, 100, 230, 255], // blue
-    },
-  ];
 
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
       const idx = r * cols + c;
       const offset = idx * 12;
 
-      // Axial coords centered → world px (FLAT-TOP hex layout, match main).
-      // flat-top: x = size * 1.5 * q, y = size * √3 * (r + q/2)
+      // FLAT-TOP axial layout: x = size*1.5*q, y = size*√3*(r + q/2).
       const q = c - halfC;
       const rAxial = r - halfR;
       const x = sizeWorldPx * 1.5 * q;
@@ -97,19 +89,7 @@ export function generateSandboxData(rows = 64, cols = 64, seed = 1): SandboxBuff
       instView.setFloat32(offset, x, true);
       instView.setFloat32(offset + 4, y, true);
 
-      // Pick closest region within radius, else neutral.
-      let color: readonly [number, number, number, number] = NEUTRAL_COLOR;
-      let bestDist = Infinity;
-      for (const region of regions) {
-        const dq = c - region.centerCol;
-        const dr = r - region.centerRow;
-        const dist = Math.sqrt(dq * dq + dr * dr);
-        if (dist < region.radius && dist < bestDist) {
-          bestDist = dist;
-          color = region.color;
-        }
-      }
-
+      const color = TERRAIN_COLORS[terrainMap[idx]!];
       instView.setUint8(offset + 8, color[0]);
       instView.setUint8(offset + 9, color[1]);
       instView.setUint8(offset + 10, color[2]);
@@ -123,6 +103,139 @@ export function generateSandboxData(rows = 64, cols = 64, seed = 1): SandboxBuff
     indexBuffer: FAN_INDICES.slice(),
     hexCount,
   };
+}
+
+/**
+ * Terrain map generator — 2-layer value noise (elevation + moisture).
+ *
+ * Pipeline:
+ *   1. Elevation noise (3 octaves) → ocean / land / mountain
+ *   2. Moisture noise (2 octaves, different seed) → forest vs plains on land
+ *   3. Coast pass: land hex giáp ocean → Coast
+ *   4. Urban pass: sparse random trên Plains (~3% chance)
+ */
+function generateTerrainMap(rows: number, cols: number, seed: number): Uint8Array {
+  const map = new Uint8Array(rows * cols);
+
+  const elevNoise = makeValueNoise(seed * 73 + 1);
+  const moistNoise = makeValueNoise(seed * 1531 + 17);
+
+  // Pass 1+2: elevation + moisture → base terrain
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const idx = r * cols + c;
+      // Sample noise in 0..1 range, scale x4 for "continent-sized" features.
+      const fx = c / cols;
+      const fy = r / rows;
+      const elevation = octaveNoise(elevNoise, fx, fy, 3, 4);
+      const moisture = octaveNoise(moistNoise, fx, fy, 2, 4);
+
+      let terrain: Terrain;
+      if (elevation < 0.40) terrain = Terrain.Ocean;
+      else if (elevation > 0.78) terrain = Terrain.Mountain;
+      else if (moisture > 0.55) terrain = Terrain.Forest;
+      else terrain = Terrain.Plains;
+
+      map[idx] = terrain;
+    }
+  }
+
+  // Pass 3: Coast — land hex giáp ocean.
+  // Flat-top axial 6-neighbor offsets (approximate for offset coords).
+  const NEIGHBORS = [
+    [+1, 0], [-1, 0],
+    [0, +1], [0, -1],
+    [+1, -1], [-1, +1],
+  ];
+  const original = new Uint8Array(map);
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const idx = r * cols + c;
+      if (original[idx] === Terrain.Ocean) continue;
+      // Skip mountains becoming coast (mountain takes priority).
+      if (original[idx] === Terrain.Mountain) continue;
+      for (const [dc, dr] of NEIGHBORS) {
+        const nr = r + dr!;
+        const nc = c + dc!;
+        if (nr < 0 || nr >= rows || nc < 0 || nc >= cols) continue;
+        const nIdx = nr * cols + nc;
+        if (original[nIdx] === Terrain.Ocean) {
+          map[idx] = Terrain.Coast;
+          break;
+        }
+      }
+    }
+  }
+
+  // Pass 4: Urban — sparse random trên Plains.
+  const urbanRng = mulberry32(seed * 2027 + 31);
+  for (let i = 0; i < map.length; i++) {
+    if (map[i] === Terrain.Plains && urbanRng() < 0.03) {
+      map[i] = Terrain.Urban;
+    }
+  }
+
+  return map;
+}
+
+// ─── Noise helpers ────────────────────────────────────────────────────────────
+
+interface ValueNoise {
+  sample(x: number, y: number): number;
+}
+
+/** Simple value-noise: random per integer cell, bilinear interpolated. */
+function makeValueNoise(seed: number): ValueNoise {
+  // Pre-generate gradient grid (32×32). For a 64×64 map this is enough.
+  const GRID = 64;
+  const grid = new Float32Array(GRID * GRID);
+  const rng = mulberry32(seed);
+  for (let i = 0; i < grid.length; i++) grid[i] = rng();
+
+  const sample = (x: number, y: number): number => {
+    // x,y in 0..1 — map to grid cell.
+    const fx = x * GRID;
+    const fy = y * GRID;
+    const x0 = Math.floor(fx) % GRID;
+    const y0 = Math.floor(fy) % GRID;
+    const x1 = (x0 + 1) % GRID;
+    const y1 = (y0 + 1) % GRID;
+    const tx = fx - Math.floor(fx);
+    const ty = fy - Math.floor(fy);
+    // Smoothstep ease for less linear-grid feel.
+    const sx = tx * tx * (3 - 2 * tx);
+    const sy = ty * ty * (3 - 2 * ty);
+    const v00 = grid[y0 * GRID + x0]!;
+    const v10 = grid[y0 * GRID + x1]!;
+    const v01 = grid[y1 * GRID + x0]!;
+    const v11 = grid[y1 * GRID + x1]!;
+    const a = v00 + (v10 - v00) * sx;
+    const b = v01 + (v11 - v01) * sx;
+    return a + (b - a) * sy;
+  };
+
+  return { sample };
+}
+
+/** Sum N octaves of noise at increasing frequency, decreasing amplitude. */
+function octaveNoise(
+  n: ValueNoise,
+  x: number,
+  y: number,
+  octaves: number,
+  baseFreq: number,
+): number {
+  let total = 0;
+  let amplitude = 1;
+  let freq = baseFreq;
+  let ampSum = 0;
+  for (let i = 0; i < octaves; i++) {
+    total += n.sample(x * freq, y * freq) * amplitude;
+    ampSum += amplitude;
+    amplitude *= 0.5;
+    freq *= 2;
+  }
+  return total / ampSum; // normalize to 0..1
 }
 
 /** Mulberry32 PRNG — deterministic seed (?seed=N URL param test). */
