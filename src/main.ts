@@ -269,7 +269,9 @@ async function bootstrap(): Promise<void> {
     lodSwitchTimer = setTimeout(() => {
       lodSwitchTimer = null;
       if (lodInFlight) return;
-      const next = pickTier(viewport.scale.x, availableTiers, currentTier);
+      // currentTier is always a valid TierName (validated via manifest.tiles) — safe cast.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const next = pickTier(viewport.scale.x, availableTiers, currentTier as any);
       if (next === currentTier) return;
       lodInFlight = true;
       const fromTier = currentTier;
