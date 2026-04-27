@@ -210,9 +210,10 @@ async function bootstrap(): Promise<void> {
   // Use case: stress test single tier (e.g. ?tier=10km) without other tiers
   // polluting cache/CPU/memory. When locked, initial = locked tier, no
   // tier transitions, no adjacent prefetch.
-  const lockedTier = (() => {
+  const lockedTier: string | null = (() => {
     const t = new URLSearchParams(location.search).get('tier');
-    return t !== null && availableTiers.has(t) ? t : null;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return t && availableTiers.has(t as any) ? t : null;
   })();
 
   // Initial: load coarsest tier (or locked tier for perf isolation).
@@ -279,7 +280,8 @@ async function bootstrap(): Promise<void> {
   const m = performance.getEntriesByName('boot-to-playable').pop();
   console.info('[boot] ready', {
     engine,
-    bootMs: m !== undefined ? Math.round(m.duration) : null,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    bootMs: m ? Math.round((m as any).duration) : null,
     initialTier,
     countryCount: countries.countries.length,
     hexCount: manifest.tiles[initialTier]?.hexCount ?? 0,
