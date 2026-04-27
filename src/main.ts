@@ -139,13 +139,13 @@ async function bootstrap(): Promise<void> {
   // Phase 6.7: infinite horizontal wrap (replaces tier-aware pan clamps).
   enableInfiniteWrap(viewport);
 
-  // ?map=sandbox: synthetic 64×64 hex grid, 3 random country regions in middle.
-  // Bypass tier/chunk/manifest infrastructure entirely — texture/shader test bed.
-  const isSandbox = new URLSearchParams(location.search).get('map') === 'sandbox';
-  if (isSandbox) {
-    await bootstrapSandbox(app, viewport);
-    return;
-  }
+  // BRANCH exp/texture-sandbox: ALWAYS sandbox mode (synthetic 64×64 grid +
+  // 3 random country regions). Bypass tier/chunk/manifest infrastructure.
+  // Production main branch không có code path này — production code dưới đây
+  // không reach trên branch này. Khi cherry-pick winners back, chỉ pick
+  // sandbox layer/data files, KHÔNG pick main.ts changes.
+  await bootstrapSandbox(app, viewport);
+  return;
 
   // Phase 7: engine selector. Default = mesh (Phase 7 path). ?engine=particles
   // falls back to Phase 6 ParticleContainer renderer (rollback path D-8).
@@ -212,7 +212,7 @@ async function bootstrap(): Promise<void> {
   // tier transitions, no adjacent prefetch.
   const lockedTier = (() => {
     const t = new URLSearchParams(location.search).get('tier');
-    return t && availableTiers.has(t) ? t : null;
+    return t !== null && availableTiers.has(t) ? t : null;
   })();
 
   // Initial: load coarsest tier (or locked tier for perf isolation).
@@ -279,7 +279,7 @@ async function bootstrap(): Promise<void> {
   const m = performance.getEntriesByName('boot-to-playable').pop();
   console.info('[boot] ready', {
     engine,
-    bootMs: m ? Math.round(m.duration) : null,
+    bootMs: m !== undefined ? Math.round(m.duration) : null,
     initialTier,
     countryCount: countries.countries.length,
     hexCount: manifest.tiles[initialTier]?.hexCount ?? 0,
