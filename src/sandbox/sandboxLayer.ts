@@ -72,10 +72,11 @@ export function createSandboxLayer(
   // pattern trong meshHexLayer.ts). Runtime Pixi accept any Container child.
   root.addChild(mesh as unknown as Container);
 
-  // Bounds approximation: 64×64 cells, hex pitch 1.5 × kmToWorldPx(25).
-  // Actual = computed from instances but estimate đủ cho fitViewport.
-  const halfX = (cols / 2) * 1.5 * 4; // ~4px per 25km hex inradius
-  const halfY = (rows / 2) * Math.sqrt(3) * 4;
+  // Bounds estimate cho pointy-top hex layout (kmToWorldPx(25) ≈ 4px).
+  // pointy-top pitch: x = size*√3, y = size*1.5
+  const SIZE_PX = 4;
+  const halfX = (cols / 2) * Math.sqrt(3) * SIZE_PX;
+  const halfY = (rows / 2) * 1.5 * SIZE_PX;
 
   const destroy = (): void => {
     mesh.destroy({ children: true });

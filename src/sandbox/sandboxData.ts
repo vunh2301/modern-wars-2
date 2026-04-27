@@ -42,10 +42,11 @@ interface RegionSpec {
 export function generateSandboxData(rows = 64, cols = 64, seed = 1): SandboxBuffers {
   const sizeWorldPx = kmToWorldPx(TIER_KM);
 
-  // Template: 6 vertices around hex center, flat-top orientation.
+  // Template: 6 vertices around hex center, POINTY-TOP orientation.
+  // Vertices at 30°, 90°, 150°, 210°, 270°, 330° → top vertex (i=1) là chóp nhọn.
   const template = new Float32Array(12);
   for (let i = 0; i < 6; i++) {
-    const angle = (Math.PI / 3) * i;
+    const angle = (Math.PI / 3) * i + Math.PI / 6; // 30° offset = pointy-top
     template[i * 2] = Math.cos(angle) * sizeWorldPx;
     template[i * 2 + 1] = Math.sin(angle) * sizeWorldPx;
   }
@@ -85,11 +86,12 @@ export function generateSandboxData(rows = 64, cols = 64, seed = 1): SandboxBuff
       const idx = r * cols + c;
       const offset = idx * 12;
 
-      // Axial coords centered → world px (flat-top hex layout).
+      // Axial coords centered → world px (POINTY-TOP hex layout).
+      // pointy-top: x = size * √3 * (q + r/2), y = size * 1.5 * r
       const q = c - halfC;
       const rAxial = r - halfR;
-      const x = sizeWorldPx * 1.5 * q;
-      const y = sizeWorldPx * Math.sqrt(3) * (rAxial + q / 2);
+      const x = sizeWorldPx * Math.sqrt(3) * (q + rAxial / 2);
+      const y = sizeWorldPx * 1.5 * rAxial;
 
       instView.setFloat32(offset, x, true);
       instView.setFloat32(offset + 4, y, true);
