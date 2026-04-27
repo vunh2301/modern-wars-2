@@ -129,8 +129,17 @@ async function bootstrap(): Promise<void> {
 
   const benchmark = createBenchmark(app, hexLayer);
 
-  // Initial: load coarsest tier for instant world view
-  const initialTier = pickTier(1, availableTiers);
+  // Phase 8 perf-test: ?tier=<name> locks LOD switcher + skips warm prefetch.
+  // Use case: stress test single tier (e.g. ?tier=10km) without other tiers
+  // polluting cache/CPU/memory. When locked, initial = locked tier, no
+  // tier transitions, no adjacent prefetch.
+  const lockedTier = (() => {
+    const t = new URLSearchParams(location.search).get('tier');
+    return t && availableTiers.has(t) ? t : null;
+  })();
+
+  // Initial: load coarsest tier (or locked tier for perf isolation).
+  const initialTier = lockedTier ?? pickTier(1, availableTiers);
   const initialSizeKm = manifest.tiles[initialTier]?.sizeKm ?? 50;
   await hexLayer.setTier(initialTier, initialSizeKm);
 
@@ -165,7 +174,8 @@ async function bootstrap(): Promise<void> {
       }
     })();
   };
-  warmAdjacentTiers(initialTier);
+  // Skip warm prefetch when ?tier= locked — perf test wants single-tier isolation.
+  if (!lockedTier) warmAdjacentTiers(initialTier);
 
   // Phase 6: viewport-based chunk culling. cullNow() fires synchronously so
   // first frame after setTier renders only visible chunks (no blank flash).
@@ -253,6 +263,8 @@ async function bootstrap(): Promise<void> {
   let lodInFlight = false;
 
   const maybeSwitchLod = (): void => {
+    // Lock tier when ?tier= URL param set — perf test isolation.
+    if (lockedTier) return;
     if (lodSwitchTimer) clearTimeout(lodSwitchTimer);
     lodSwitchTimer = setTimeout(() => {
       lodSwitchTimer = null;
