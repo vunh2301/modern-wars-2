@@ -42,14 +42,15 @@ export const enum Terrain {
   Urban = 5,    // city blocks, +40% defense, controllable
 }
 
-const TERRAIN_COLORS: Record<Terrain, RGBA> = {
-  [Terrain.Ocean]:    [14, 33, 64, 255],   // #0e2140 deep blue
-  [Terrain.Coast]:    [30, 69, 112, 255],  // #1e4570 lighter blue
-  [Terrain.Plains]:   [156, 138, 85, 255], // #9c8a55 khaki-green
-  [Terrain.Forest]:   [46, 94, 44, 255],   // #2e5e2c dark green
-  [Terrain.Mountain]: [110, 94, 84, 255],  // #6e5e54 gray-brown
-  [Terrain.Urban]:    [74, 74, 74, 255],   // #4a4a4a dark gray
-};
+// Indexed by Terrain enum value (0..5) for direct number lookup.
+const TERRAIN_COLORS: ReadonlyArray<RGBA> = [
+  [14, 33, 64, 255],    // 0 Ocean    #0e2140 deep blue
+  [30, 69, 112, 255],   // 1 Coast    #1e4570 lighter blue
+  [156, 138, 85, 255],  // 2 Plains   #9c8a55 khaki-green
+  [46, 94, 44, 255],    // 3 Forest   #2e5e2c dark green
+  [110, 94, 84, 255],   // 4 Mountain #6e5e54 gray-brown
+  [74, 74, 74, 255],    // 5 Urban    #4a4a4a dark gray
+];
 
 // ─── Generator ────────────────────────────────────────────────────────────────
 
@@ -89,7 +90,7 @@ export function generateSandboxData(rows = 64, cols = 64, seed = 1): SandboxBuff
       instView.setFloat32(offset, x, true);
       instView.setFloat32(offset + 4, y, true);
 
-      const color = TERRAIN_COLORS[terrainMap[idx]!];
+      const color = TERRAIN_COLORS[terrainMap[idx]!]!;
       instView.setUint8(offset + 8, color[0]);
       instView.setUint8(offset + 9, color[1]);
       instView.setUint8(offset + 10, color[2]);
