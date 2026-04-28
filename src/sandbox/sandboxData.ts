@@ -128,35 +128,37 @@ export function generateSandboxData(rows = 64, cols = 64, seed = 1): SandboxBuff
 }
 
 // ─── Tunable constants ────────────────────────────────────────────────────────
-// Phase 1 worldgen upgrade — based on demo/index.html V2 reference formula.
-const ELEVATION_FREQ = 4;        // base freq cho 6-octave fbm (continent scale).
-const ELEVATION_OCTAVES = 6;     // smooth multi-scale terrain.
-const RADIAL_FALLOFF_WEIGHT = 0.30; // 70/30 noise/radial split.
-const ELEV_NOISE_WEIGHT = 0.70;
-const ELEV_FALLOFF_POWER = 2.4;  // soft falloff (1 - dist^2.4).
-const ELEV_CURVE_POWER = 0.85;   // ^0.85 push values toward higher band.
+// Phase 1 worldgen — V2 demo formula. Re-tuned sau test trên iPhone (center
+// quá nhiều mountain, edge quá speckle). Reduced radial bias + raised mountain
+// threshold + sharper falloff.
+const ELEVATION_FREQ = 3;        // base freq cho 6-octave fbm. Lower = bigger continents.
+const ELEVATION_OCTAVES = 6;
+const RADIAL_FALLOFF_WEIGHT = 0.20; // dropped 0.30 → 0.20 (center elev không bị push lên Mountain).
+const ELEV_NOISE_WEIGHT = 0.80;     // dropped 0.70 → 0.80 (noise dominate, không phải radial).
+const ELEV_FALLOFF_POWER = 1.5;     // dropped 2.4 → 1.5 (sharper falloff, less center plateau).
+const ELEV_CURVE_POWER = 0.90;      // 0.85 → 0.90 (gentler curve, less push toward high).
 const MOISTURE_FREQ = 4;
 const MOISTURE_OCTAVES = 4;
-const MOISTURE_BIAS = 0;         // tunable: -0.4..+0.4 (wet/dry world).
-const TEMPERATURE_FREQ = 5;      // small noise overlay on latitude gradient.
+const MOISTURE_BIAS = 0;
+const TEMPERATURE_FREQ = 5;
 const TEMPERATURE_OCTAVES = 3;
 const TEMPERATURE_LATITUDE_WEIGHT = 0.85;
 const TEMPERATURE_NOISE_WEIGHT = 0.15;
-const TEMPERATURE_ELEV_PENALTY = 0.4; // mountain cells colder.
+const TEMPERATURE_ELEV_PENALTY = 0.4;
 
-// Classification thresholds.
-const SEA_LEVEL = 0.42;          // elev < this → Ocean.
-const COAST_BAND = 0.04;         // elev < SEA_LEVEL + this → Coast (deterministic, no BFS).
-const MOUNTAIN_LEVEL = 0.66;     // elev > this → Mountain.
-const HILL_BAND = 0.10;          // elev > MOUNTAIN_LEVEL - this → Hill.
-const SWAMP_MOISTURE = 0.68;     // moisture > this + low elev → Swamp.
-const SWAMP_ELEV_BAND = 0.20;    // elev < SEA_LEVEL + this for Swamp.
+// Classification thresholds (re-tuned for distribution balance).
+const SEA_LEVEL = 0.40;          // 0.42 → 0.40 (slightly more land).
+const COAST_BAND = 0.05;         // 0.04 → 0.05 (wider coast ring).
+const MOUNTAIN_LEVEL = 0.78;     // 0.66 → 0.78 (mountain rare, only top 22% of elev).
+const HILL_BAND = 0.12;          // 0.10 → 0.12 (slightly wider hill ring).
+const SWAMP_MOISTURE = 0.70;     // 0.68 → 0.70 (rarer swamp).
+const SWAMP_ELEV_BAND = 0.18;    // tighter swamp zone (low elev only).
 const FOREST_MOISTURE = 0.55;
-const DESERT_MOISTURE = 0.38;
-const DESERT_TEMPERATURE = 0.50; // desert cần warm zone (block polar deserts).
+const DESERT_MOISTURE = 0.35;    // 0.38 → 0.35 (desert rarer).
+const DESERT_TEMPERATURE = 0.55; // 0.50 → 0.55 (desert chỉ ở zone really warm).
 const URBAN_PROBABILITY = 0.006;
-const SMOOTHING_PASSES = 3;      // smoothing kills speckle (kept from prior).
-const OCEAN_FILL_NEIGHBORS = 5;  // ocean cell với >= N land neighbors → fill.
+const SMOOTHING_PASSES = 3;
+const OCEAN_FILL_NEIGHBORS = 5;
 
 /**
  * Phase 1 worldgen — V2 reference (demo/index.html) ported.
