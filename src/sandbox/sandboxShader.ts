@@ -101,6 +101,10 @@ const GL_FRAGMENT = /* glsl */ `
       vec2 block = floor(p * 0.4);
       finalColor += vec3(0.06) * (hash(block) - 0.5);
       finalColor += vec3(0.03) * (hi - 0.5);
+    } else if (tid == 6) {
+      // Desert — sandy grain + subtle dune-like low-freq variation
+      finalColor += vec3(0.08, 0.06, 0.02) * (lo - 0.5);
+      finalColor += vec3(0.05, 0.04, 0.02) * (vnoise(p * 4.0) - 0.5);
     }
 
     finalColor += vec3(cellJitter);
@@ -206,6 +210,9 @@ fn main(
     let block = floor(p * 0.4);
     finalColor = finalColor + vec3<f32>(0.06) * (hash2(block) - 0.5);
     finalColor = finalColor + vec3<f32>(0.03) * (hi - 0.5);
+  } else if (tid == 6) {
+    finalColor = finalColor + vec3<f32>(0.08, 0.06, 0.02) * (lo - 0.5);
+    finalColor = finalColor + vec3<f32>(0.05, 0.04, 0.02) * (vnoise(p * 4.0) - 0.5);
   }
 
   finalColor = finalColor + vec3<f32>(cellJitter);

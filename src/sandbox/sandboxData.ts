@@ -30,7 +30,7 @@ const FAN_INDICES = new Uint32Array([
 ]);
 
 // ─── Terrain palette ──────────────────────────────────────────────────────────
-// 6 terrain types cho modern war RTS world map. RGB tuple + future gameplay.
+// 7 terrain types cho modern war RTS world map. RGB tuple + future gameplay.
 type RGBA = readonly [number, number, number, number];
 
 export const enum Terrain {
@@ -40,9 +40,10 @@ export const enum Terrain {
   Forest = 3,   // slow move, +25% defense, blocks LOS
   Mountain = 4, // very slow, +50% defense, naturally fortified
   Urban = 5,    // city blocks, +40% defense, controllable
+  Desert = 6,   // arid plains, fast move, low defense, low moisture
 }
 
-// Indexed by Terrain enum value (0..5) for direct number lookup.
+// Indexed by Terrain enum value (0..6) for direct number lookup.
 const TERRAIN_COLORS: ReadonlyArray<RGBA> = [
   [14, 33, 64, 255],    // 0 Ocean    #0e2140 deep blue
   [30, 69, 112, 255],   // 1 Coast    #1e4570 lighter blue
@@ -50,6 +51,7 @@ const TERRAIN_COLORS: ReadonlyArray<RGBA> = [
   [46, 94, 44, 255],    // 3 Forest   #2e5e2c dark green
   [110, 94, 84, 255],   // 4 Mountain #6e5e54 gray-brown
   [74, 74, 74, 255],    // 5 Urban    #4a4a4a dark gray
+  [196, 168, 120, 255], // 6 Desert   #c4a878 sandy yellow
 ];
 
 // ─── Generator ────────────────────────────────────────────────────────────────
@@ -118,61 +120,128 @@ export function generateSandboxData(rows = 64, cols = 64, seed = 1): SandboxBuff
   };
 }
 
+// ─── Tunable constants ────────────────────────────────────────────────────────
+// Terrain generation knobs. Tune để rebalance landmass / mountain chains / etc.
+const CONTINENT_FREQ = 1.6;     // low-freq base shape (large continents). Lower = bigger landmass.
+const DETAIL_FREQ = 5;          // medium-freq variation cho coastline irregularity.
+const RIDGE_FREQ = 3.5;         // mountain chain freq. Higher = more chains, shorter.
+const MOISTURE_FREQ = 2.5;      // moisture macro distribution.
+const RADIAL_FALLOFF_WEIGHT = 0.42; // 0 = no edge bias, 1 = strong edge ocean ring.
+const SEA_LEVEL = 0.50;         // landScore < this → Ocean. Tune for ocean ratio.
+const RIDGE_THRESHOLD = 0.78;   // ridge field threshold cho Mountain.
+const ELEVATION_MOUNTAIN_MIN = 0.55; // mountain phải elevation >= này.
+const FOREST_MOISTURE = 0.58;   // moisture > này → Forest.
+const DESERT_MOISTURE = 0.32;   // moisture < này → Desert.
+const URBAN_PROBABILITY = 0.006; // sparse urban (< 1% of Plains/Coast).
+const SMOOTHING_PASSES = 2;     // neighbor-majority smoothing iterations.
+const PROXIMITY_WATER_RANGE = 8; // distance cells over which water proximity affects moisture.
+
 /**
- * Terrain map generator — 2-layer value noise (elevation + moisture).
+ * Terrain map generator — realistic macro structure.
  *
  * Pipeline:
- *   1. Elevation noise (3 octaves) → ocean / land / mountain
- *   2. Moisture noise (2 octaves, different seed) → forest vs plains on land
- *   3. Coast pass: land hex giáp ocean → Coast
- *   4. Urban pass: sparse random trên Plains (~3% chance)
+ *   1. Compute fields: continent / elevation / ridge / raw moisture
+ *   2. Initial classification: ocean vs land via landScore
+ *   3. BFS distance-to-ocean cho proximityWater
+ *   4. Refine land: Mountain (ridge+elev) → Forest (moist) → Desert (dry) → Plains
+ *   5. Smoothing 2 passes (neighbor-majority, protect Mountain/Ocean)
+ *   6. Coast pass (after smoothing) — land hex giáp ocean
+ *   7. Urban sparse trên Plains/Coast
  */
 function generateTerrainMap(rows: number, cols: number, seed: number): Uint8Array {
   const map = new Uint8Array(rows * cols);
+  const total = rows * cols;
 
-  const elevNoise = makeValueNoise(seed * 73 + 1);
+  // Independent noise generators — different seed multipliers cho decorrelation.
+  const continentNoise = makeValueNoise(seed * 73 + 1);
+  const detailNoise = makeValueNoise(seed * 211 + 7);
   const moistNoise = makeValueNoise(seed * 1531 + 17);
+  const ridgeNoise = makeValueNoise(seed * 2789 + 11);
 
-  // Pass 1+2: elevation + moisture → base terrain
+  const elevation = new Float32Array(total);
+  const ridge = new Float32Array(total);
+  const rawMoisture = new Float32Array(total);
+
+  // Pass 1: compute fields per cell.
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
       const idx = r * cols + c;
-      // Sample noise in 0..1 range, scale x4 for "continent-sized" features.
       const fx = c / cols;
       const fy = r / rows;
-      const elevation = octaveNoise(elevNoise, fx, fy, 3, 4);
-      const moisture = octaveNoise(moistNoise, fx, fy, 2, 4);
 
-      let terrain: Terrain;
-      if (elevation < 0.40) terrain = Terrain.Ocean;
-      else if (elevation > 0.78) terrain = Terrain.Mountain;
-      else if (moisture > 0.55) terrain = Terrain.Forest;
-      else terrain = Terrain.Plains;
+      // Radial falloff: 1.0 at center, 0 at corners (creates continent illusion).
+      const dx = (fx - 0.5) * 2;
+      const dy = (fy - 0.5) * 2;
+      const radial = Math.max(0, 1 - Math.sqrt(dx * dx + dy * dy));
 
-      map[idx] = terrain;
+      // Continent score: low-freq + medium-freq + radial bias.
+      const lowFreq = octaveNoise(continentNoise, fx, fy, 2, CONTINENT_FREQ);
+      const medFreq = octaveNoise(detailNoise, fx, fy, 3, DETAIL_FREQ);
+      const landScore =
+        lowFreq * (1 - RADIAL_FALLOFF_WEIGHT - 0.20) +
+        medFreq * 0.20 +
+        radial * RADIAL_FALLOFF_WEIGHT;
+
+      // Elevation: weighted combo (continent dominates).
+      elevation[idx] = landScore * 0.72 + medFreq * 0.28;
+
+      // Ridge field: 1 - |2*n - 1| (peaks where noise = 0.5) → ridge-like patterns.
+      const rNoise = octaveNoise(ridgeNoise, fx, fy, 3, RIDGE_FREQ);
+      ridge[idx] = 1 - Math.abs(2 * rNoise - 1);
+
+      // Raw moisture noise (refined later with proximity-to-water).
+      rawMoisture[idx] = octaveNoise(moistNoise, fx, fy, 2, MOISTURE_FREQ);
+
+      // Initial ocean/land split.
+      map[idx] = landScore < SEA_LEVEL ? Terrain.Ocean : Terrain.Plains;
     }
   }
 
-  // Pass 3: Coast — land hex giáp ocean.
-  // Flat-top axial 6-neighbor offsets (approximate for offset coords).
-  const NEIGHBORS = [
-    [+1, 0], [-1, 0],
-    [0, +1], [0, -1],
-    [+1, -1], [-1, +1],
-  ];
-  const original = new Uint8Array(map);
+  // Pass 2: BFS distance-to-ocean (Manhattan-ish via offset hex neighbors).
+  const distToOcean = computeDistanceToOcean(map, rows, cols);
+
+  // Pass 3: refine land classification.
+  for (let i = 0; i < total; i++) {
+    if (map[i] === Terrain.Ocean) continue;
+
+    const elev = elevation[i]!;
+    const ri = ridge[i]!;
+
+    // Mountain — high ridge + high elevation (forms chains, not isolated dots).
+    if (ri > RIDGE_THRESHOLD && elev > ELEVATION_MOUNTAIN_MIN) {
+      map[i] = Terrain.Mountain;
+      continue;
+    }
+
+    // Moisture: noise * 0.6 + proximity-to-water * 0.25 - elevation penalty * 0.15.
+    const proximity = Math.max(0, 1 - distToOcean[i]! / PROXIMITY_WATER_RANGE);
+    const moisture = rawMoisture[i]! * 0.6 + proximity * 0.25 - elev * 0.15 + 0.15;
+
+    if (moisture > FOREST_MOISTURE) {
+      map[i] = Terrain.Forest;
+    } else if (moisture < DESERT_MOISTURE) {
+      map[i] = Terrain.Desert;
+    } else {
+      map[i] = Terrain.Plains;
+    }
+  }
+
+  // Pass 4: smoothing — neighbor-majority để remove 1-cell speckles.
+  // Protect Ocean + Mountain (preserve macro shape).
+  for (let pass = 0; pass < SMOOTHING_PASSES; pass++) {
+    smoothMap(map, rows, cols);
+  }
+
+  // Pass 5: Coast detection (after smoothing, before Urban).
+  const beforeCoast = new Uint8Array(map);
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
       const idx = r * cols + c;
-      if (original[idx] === Terrain.Ocean) continue;
-      // Skip mountains becoming coast (mountain takes priority).
-      if (original[idx] === Terrain.Mountain) continue;
-      for (const [dc, dr] of NEIGHBORS) {
-        const nr = r + dr!;
-        const nc = c + dc!;
+      if (beforeCoast[idx] === Terrain.Ocean) continue;
+      if (beforeCoast[idx] === Terrain.Mountain) continue;
+      for (const [nc, nr] of getOffsetNeighbors(c, r)) {
         if (nr < 0 || nr >= rows || nc < 0 || nc >= cols) continue;
-        const nIdx = nr * cols + nc;
-        if (original[nIdx] === Terrain.Ocean) {
+        if (beforeCoast[nr * cols + nc] === Terrain.Ocean) {
           map[idx] = Terrain.Coast;
           break;
         }
@@ -180,15 +249,107 @@ function generateTerrainMap(rows: number, cols: number, seed: number): Uint8Arra
     }
   }
 
-  // Pass 4: Urban — sparse random trên Plains.
+  // Pass 6: Urban — sparse random trên Plains/Coast (rare, < 1% chance).
   const urbanRng = mulberry32(seed * 2027 + 31);
-  for (let i = 0; i < map.length; i++) {
-    if (map[i] === Terrain.Plains && urbanRng() < 0.03) {
+  for (let i = 0; i < total; i++) {
+    if ((map[i] === Terrain.Plains || map[i] === Terrain.Coast) && urbanRng() < URBAN_PROBABILITY) {
       map[i] = Terrain.Urban;
     }
   }
 
   return map;
+}
+
+// ─── Topology helpers ─────────────────────────────────────────────────────────
+
+/**
+ * Flat-top odd-q offset coord 6-neighbor offsets.
+ * Even col (c%2 == 0): NW(c-1,r-1), W(c-1,r), N(c,r-1), S(c,r+1), NE(c+1,r-1), E(c+1,r)
+ * Odd col  (c%2 == 1): W(c-1,r), SW(c-1,r+1), N(c,r-1), S(c,r+1), E(c+1,r), SE(c+1,r+1)
+ *
+ * Reference: redblobgames.com/grids/hexagons (offset coordinates).
+ */
+function getOffsetNeighbors(c: number, r: number): ReadonlyArray<readonly [number, number]> {
+  if (c % 2 === 1) {
+    return [[c - 1, r], [c - 1, r + 1], [c, r - 1], [c, r + 1], [c + 1, r], [c + 1, r + 1]];
+  }
+  return [[c - 1, r - 1], [c - 1, r], [c, r - 1], [c, r + 1], [c + 1, r - 1], [c + 1, r]];
+}
+
+/** BFS distance from each cell to nearest Ocean (in hex-step count). */
+function computeDistanceToOcean(map: Uint8Array, rows: number, cols: number): Uint8Array {
+  const total = rows * cols;
+  const dist = new Uint8Array(total).fill(255);
+  const queue: number[] = [];
+
+  // Seed BFS với all Ocean cells (distance 0).
+  for (let i = 0; i < total; i++) {
+    if (map[i] === Terrain.Ocean) {
+      dist[i] = 0;
+      queue.push(i);
+    }
+  }
+
+  // BFS expand.
+  let head = 0;
+  while (head < queue.length) {
+    const idx = queue[head++]!;
+    const r = (idx / cols) | 0;
+    const c = idx - r * cols;
+    const d = dist[idx]!;
+    if (d >= 254) continue; // saturate
+    for (const [nc, nr] of getOffsetNeighbors(c, r)) {
+      if (nr < 0 || nr >= rows || nc < 0 || nc >= cols) continue;
+      const nIdx = nr * cols + nc;
+      if (dist[nIdx] > d + 1) {
+        dist[nIdx] = d + 1;
+        queue.push(nIdx);
+      }
+    }
+  }
+
+  return dist;
+}
+
+/**
+ * Single-pass neighbor-majority smoothing.
+ * For each cell: if dominant neighbor terrain count > self count, switch.
+ * Protect Ocean and Mountain (skip — preserve macro shape).
+ */
+function smoothMap(map: Uint8Array, rows: number, cols: number): void {
+  const original = new Uint8Array(map);
+  const counts = new Uint8Array(8); // up to 7 terrain types + slack
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const idx = r * cols + c;
+      const self = original[idx]!;
+      // Protected terrains — preserve macro structure.
+      if (self === Terrain.Ocean || self === Terrain.Mountain) continue;
+      counts.fill(0);
+      let neighborCount = 0;
+      for (const [nc, nr] of getOffsetNeighbors(c, r)) {
+        if (nr < 0 || nr >= rows || nc < 0 || nc >= cols) continue;
+        const t = original[nr * cols + nc]!;
+        counts[t]!++;
+        neighborCount++;
+      }
+      // Find dominant neighbor terrain.
+      let bestTerrain = self;
+      let bestCount = 0;
+      for (let t = 0; t < 8; t++) {
+        if (counts[t]! > bestCount) {
+          bestCount = counts[t]!;
+          bestTerrain = t as Terrain;
+        }
+      }
+      // Switch only if dominant neighbor strongly outnumbers self (>= 4 of 6).
+      if (bestTerrain !== self && bestCount >= Math.ceil(neighborCount * 0.65)) {
+        // Don't smooth INTO Ocean (would shrink coastlines), unless self is rare speckle.
+        if (bestTerrain === Terrain.Ocean && counts[self as number]! > 0) continue;
+        map[idx] = bestTerrain;
+      }
+    }
+  }
 }
 
 // ─── Noise helpers ────────────────────────────────────────────────────────────
