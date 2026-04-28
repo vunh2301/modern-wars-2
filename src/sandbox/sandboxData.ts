@@ -122,19 +122,21 @@ export function generateSandboxData(rows = 64, cols = 64, seed = 1): SandboxBuff
 
 // ─── Tunable constants ────────────────────────────────────────────────────────
 // Terrain generation knobs. Tune để rebalance landmass / mountain chains / etc.
-const CONTINENT_FREQ = 1.6;     // low-freq base shape (large continents). Lower = bigger landmass.
-const DETAIL_FREQ = 5;          // medium-freq variation cho coastline irregularity.
-const RIDGE_FREQ = 3.5;         // mountain chain freq. Higher = more chains, shorter.
-const MOISTURE_FREQ = 2.5;      // moisture macro distribution.
-const RADIAL_FALLOFF_WEIGHT = 0.42; // 0 = no edge bias, 1 = strong edge ocean ring.
-const SEA_LEVEL = 0.50;         // landScore < this → Ocean. Tune for ocean ratio.
-const RIDGE_THRESHOLD = 0.78;   // ridge field threshold cho Mountain.
-const ELEVATION_MOUNTAIN_MIN = 0.55; // mountain phải elevation >= này.
-const FOREST_MOISTURE = 0.58;   // moisture > này → Forest.
-const DESERT_MOISTURE = 0.32;   // moisture < này → Desert.
-const URBAN_PROBABILITY = 0.006; // sparse urban (< 1% of Plains/Coast).
-const SMOOTHING_PASSES = 2;     // neighbor-majority smoothing iterations.
-const PROXIMITY_WATER_RANGE = 8; // distance cells over which water proximity affects moisture.
+const CONTINENT_FREQ = 1.0;     // low-freq base shape — LOWER = bigger smoother continents.
+const DETAIL_FREQ = 4;          // medium-freq coastline irregularity.
+const RIDGE_FREQ = 3.5;         // mountain chain freq.
+const MOISTURE_FREQ = 2.5;
+const RADIAL_FALLOFF_WEIGHT = 0.30; // edge ocean bias (lower = land reaches near edge).
+const LANDSCORE_BLUR_PASSES = 2; // box blur landScore field BEFORE classification (kills speckle).
+const SEA_LEVEL = 0.46;         // landScore < this → Ocean.
+const RIDGE_THRESHOLD = 0.78;
+const ELEVATION_MOUNTAIN_MIN = 0.55;
+const FOREST_MOISTURE = 0.58;
+const DESERT_MOISTURE = 0.32;
+const URBAN_PROBABILITY = 0.006;
+const SMOOTHING_PASSES = 4;     // more passes = smoother coastlines, less speckle.
+const OCEAN_FILL_NEIGHBORS = 5; // ocean cell becomes land if >= N of 6 neighbors are land.
+const PROXIMITY_WATER_RANGE = 8;
 
 /**
  * Terrain map generator — realistic macro structure.
@@ -158,11 +160,12 @@ function generateTerrainMap(rows: number, cols: number, seed: number): Uint8Arra
   const moistNoise = makeValueNoise(seed * 1531 + 17);
   const ridgeNoise = makeValueNoise(seed * 2789 + 11);
 
+  const landScore = new Float32Array(total);
   const elevation = new Float32Array(total);
   const ridge = new Float32Array(total);
   const rawMoisture = new Float32Array(total);
 
-  // Pass 1: compute fields per cell.
+  // Pass 1: compute raw fields per cell.
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
       const idx = r * cols + c;
@@ -174,27 +177,31 @@ function generateTerrainMap(rows: number, cols: number, seed: number): Uint8Arra
       const dy = (fy - 0.5) * 2;
       const radial = Math.max(0, 1 - Math.sqrt(dx * dx + dy * dy));
 
-      // Continent score: low-freq + medium-freq + radial bias.
       const lowFreq = octaveNoise(continentNoise, fx, fy, 2, CONTINENT_FREQ);
       const medFreq = octaveNoise(detailNoise, fx, fy, 3, DETAIL_FREQ);
-      const landScore =
+      landScore[idx] =
         lowFreq * (1 - RADIAL_FALLOFF_WEIGHT - 0.20) +
         medFreq * 0.20 +
         radial * RADIAL_FALLOFF_WEIGHT;
 
-      // Elevation: weighted combo (continent dominates).
-      elevation[idx] = landScore * 0.72 + medFreq * 0.28;
+      elevation[idx] = landScore[idx]! * 0.72 + medFreq * 0.28;
 
-      // Ridge field: 1 - |2*n - 1| (peaks where noise = 0.5) → ridge-like patterns.
       const rNoise = octaveNoise(ridgeNoise, fx, fy, 3, RIDGE_FREQ);
       ridge[idx] = 1 - Math.abs(2 * rNoise - 1);
 
-      // Raw moisture noise (refined later with proximity-to-water).
       rawMoisture[idx] = octaveNoise(moistNoise, fx, fy, 2, MOISTURE_FREQ);
-
-      // Initial ocean/land split.
-      map[idx] = landScore < SEA_LEVEL ? Terrain.Ocean : Terrain.Plains;
     }
+  }
+
+  // Pass 1.5: smooth landScore field BEFORE binary classification.
+  // Reduces threshold-zone speckle (cells loanh quanh SEA_LEVEL).
+  for (let pass = 0; pass < LANDSCORE_BLUR_PASSES; pass++) {
+    boxBlur(landScore, rows, cols);
+  }
+
+  // Pass 1.6: binary ocean/land split using smoothed landScore.
+  for (let i = 0; i < total; i++) {
+    map[i] = landScore[i]! < SEA_LEVEL ? Terrain.Ocean : Terrain.Plains;
   }
 
   // Pass 2: BFS distance-to-ocean (Manhattan-ish via offset hex neighbors).
@@ -313,27 +320,53 @@ function computeDistanceToOcean(map: Uint8Array, rows: number, cols: number): Ui
 
 /**
  * Single-pass neighbor-majority smoothing.
- * For each cell: if dominant neighbor terrain count > self count, switch.
- * Protect Ocean and Mountain (skip — preserve macro shape).
+ *
+ * Logic:
+ *   - Ocean cell với ≥ OCEAN_FILL_NEIGHBORS land neighbors (5 of 6) → fill with majority
+ *     land terrain (closes lakes inside continents, kills ocean speckle in landmass)
+ *   - Mountain protected (preserve chain structure)
+ *   - Other land cell: switch to dominant neighbor if outnumbered ≥ 65%
+ *   - Block conversion INTO Ocean unless self has zero same-terrain neighbors (peninsula erosion)
  */
 function smoothMap(map: Uint8Array, rows: number, cols: number): void {
   const original = new Uint8Array(map);
-  const counts = new Uint8Array(8); // up to 7 terrain types + slack
+  const counts = new Uint8Array(8);
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
       const idx = r * cols + c;
       const self = original[idx]!;
-      // Protected terrains — preserve macro structure.
-      if (self === Terrain.Ocean || self === Terrain.Mountain) continue;
+      if (self === Terrain.Mountain) continue; // chains protected
+
       counts.fill(0);
       let neighborCount = 0;
+      let landNeighborCount = 0;
       for (const [nc, nr] of getOffsetNeighbors(c, r)) {
         if (nr < 0 || nr >= rows || nc < 0 || nc >= cols) continue;
         const t = original[nr * cols + nc]!;
         counts[t]!++;
         neighborCount++;
+        if (t !== Terrain.Ocean) landNeighborCount++;
       }
-      // Find dominant neighbor terrain.
+
+      // Special case: Ocean cell surrounded by land → fill (kill ocean speckle inside continent).
+      if (self === Terrain.Ocean) {
+        if (landNeighborCount >= OCEAN_FILL_NEIGHBORS) {
+          // Pick most common LAND neighbor terrain.
+          let bestLand: Terrain = Terrain.Plains;
+          let bestCount = 0;
+          for (let t = 0; t < 8; t++) {
+            if (t === Terrain.Ocean) continue;
+            if (counts[t]! > bestCount) {
+              bestCount = counts[t]!;
+              bestLand = t as Terrain;
+            }
+          }
+          map[idx] = bestLand;
+        }
+        continue;
+      }
+
+      // Standard land smoothing: switch to dominant neighbor if outnumbered.
       let bestTerrain = self;
       let bestCount = 0;
       for (let t = 0; t < 8; t++) {
@@ -342,12 +375,28 @@ function smoothMap(map: Uint8Array, rows: number, cols: number): void {
           bestTerrain = t as Terrain;
         }
       }
-      // Switch only if dominant neighbor strongly outnumbers self (>= 4 of 6).
       if (bestTerrain !== self && bestCount >= Math.ceil(neighborCount * 0.65)) {
-        // Don't smooth INTO Ocean (would shrink coastlines), unless self is rare speckle.
+        // Block conversion to Ocean unless self has zero same-terrain neighbors (true peninsula).
         if (bestTerrain === Terrain.Ocean && counts[self as number]! > 0) continue;
         map[idx] = bestTerrain;
       }
+    }
+  }
+}
+
+/** Box blur Float32Array field in-place. 4-direction Manhattan neighbors (cheap, sufficient). */
+function boxBlur(field: Float32Array, rows: number, cols: number): void {
+  const original = new Float32Array(field);
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const idx = r * cols + c;
+      let sum = original[idx]!;
+      let count = 1;
+      if (r > 0)        { sum += original[idx - cols]!; count++; }
+      if (r < rows - 1) { sum += original[idx + cols]!; count++; }
+      if (c > 0)        { sum += original[idx - 1]!;    count++; }
+      if (c < cols - 1) { sum += original[idx + 1]!;    count++; }
+      field[idx] = sum / count;
     }
   }
 }
