@@ -289,41 +289,6 @@ function getOffsetNeighbors(c: number, r: number): ReadonlyArray<readonly [numbe
   return [[c - 1, r - 1], [c - 1, r], [c, r - 1], [c, r + 1], [c + 1, r - 1], [c + 1, r]];
 }
 
-/** BFS distance from each cell to nearest Ocean (in hex-step count). */
-function computeDistanceToOcean(map: Uint8Array, rows: number, cols: number): Uint8Array {
-  const total = rows * cols;
-  const dist = new Uint8Array(total).fill(255);
-  const queue: number[] = [];
-
-  // Seed BFS với all Ocean cells (distance 0).
-  for (let i = 0; i < total; i++) {
-    if (map[i] === Terrain.Ocean) {
-      dist[i] = 0;
-      queue.push(i);
-    }
-  }
-
-  // BFS expand.
-  let head = 0;
-  while (head < queue.length) {
-    const idx = queue[head++]!;
-    const r = (idx / cols) | 0;
-    const c = idx - r * cols;
-    const d = dist[idx]!;
-    if (d >= 254) continue; // saturate
-    for (const [nc, nr] of getOffsetNeighbors(c, r)) {
-      if (nr < 0 || nr >= rows || nc < 0 || nc >= cols) continue;
-      const nIdx = nr * cols + nc;
-      if (dist[nIdx]! > d + 1) {
-        dist[nIdx] = d + 1;
-        queue.push(nIdx);
-      }
-    }
-  }
-
-  return dist;
-}
-
 /**
  * Single-pass neighbor-majority smoothing.
  *
@@ -386,23 +351,6 @@ function smoothMap(map: Uint8Array, rows: number, cols: number): void {
         if (bestTerrain === Terrain.Ocean && counts[self as number]! > 0) continue;
         map[idx] = bestTerrain;
       }
-    }
-  }
-}
-
-/** Box blur Float32Array field in-place. 4-direction Manhattan neighbors (cheap, sufficient). */
-function boxBlur(field: Float32Array, rows: number, cols: number): void {
-  const original = new Float32Array(field);
-  for (let r = 0; r < rows; r++) {
-    for (let c = 0; c < cols; c++) {
-      const idx = r * cols + c;
-      let sum = original[idx]!;
-      let count = 1;
-      if (r > 0)        { sum += original[idx - cols]!; count++; }
-      if (r < rows - 1) { sum += original[idx + cols]!; count++; }
-      if (c > 0)        { sum += original[idx - 1]!;    count++; }
-      if (c < cols - 1) { sum += original[idx + 1]!;    count++; }
-      field[idx] = sum / count;
     }
   }
 }
