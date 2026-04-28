@@ -62,7 +62,12 @@ const TERRAIN_COLORS: ReadonlyArray<RGBA> = [
 // ─── Generator ────────────────────────────────────────────────────────────────
 
 /** Generate hex grid với terrain noise. */
-export function generateSandboxData(rows = 64, cols = 64, seed = 1): SandboxBuffers {
+export function generateSandboxData(
+  rows = 64,
+  cols = 64,
+  seed = 1,
+  params: WorldgenParams = DEFAULT_WORLDGEN_PARAMS,
+): SandboxBuffers {
   const sizeWorldPx = kmToWorldPx(TIER_KM);
 
   // Template: 6 vertices around hex center, FLAT-TOP orientation (match main).
@@ -78,8 +83,8 @@ export function generateSandboxData(rows = 64, cols = 64, seed = 1): SandboxBuff
   const instances = new ArrayBuffer(hexCount * 16);
   const instView = new DataView(instances);
 
-  // Generate terrain map (2 noise layers: elevation + moisture).
-  const terrainMap = generateTerrainMap(rows, cols, seed);
+  // Generate terrain map với params.
+  const terrainMap = generateTerrainMap(rows, cols, seed, params);
 
   const halfC = Math.floor(cols / 2);
   const halfR = Math.floor(rows / 2);
@@ -125,46 +130,151 @@ export function generateSandboxData(rows = 64, cols = 64, seed = 1): SandboxBuff
   };
 }
 
-// ─── Tunable constants ────────────────────────────────────────────────────────
-// Phase 1 worldgen — V2 demo formula. Re-tuned sau test trên iPhone (center
-// quá nhiều mountain, edge quá speckle). Reduced radial bias + raised mountain
-// threshold + sharper falloff.
-// Noise frequencies — calibrated cho 128×256 grid (sandbox default).
-// Math: top octave = baseFreq * 2^(octaves-1). ÷ minDim = cycles per cell.
-// Want < 0.3 cycles/cell ở top octave = neighbors share noise sample.
-// minDim = 128 cols → target top freq < 38.
-const ELEVATION_FREQ = 1.8;       // 2.5 → 1.8 (bigger continents).
-const ELEVATION_OCTAVES = 5;
-const RADIAL_FALLOFF_WEIGHT = 0.20;
-const ELEV_NOISE_WEIGHT = 0.80;
-const ELEV_FALLOFF_POWER = 1.5;
-const ELEV_CURVE_POWER = 0.90;
-const MOISTURE_FREQ = 3;          // top = 3 * 8 = 24 / 128 = 0.19 cycles/cell ✓
-const MOISTURE_OCTAVES = 4;
-const MOISTURE_BIAS = 0;
-const TEMPERATURE_FREQ = 3;       // top = 3 * 2 = 6 / 128 = 0.05 cycles/cell ✓
-const TEMPERATURE_OCTAVES = 2;
-const TEMPERATURE_LATITUDE_WEIGHT = 0.85;
-const TEMPERATURE_NOISE_WEIGHT = 0.15;
-const TEMPERATURE_ELEV_PENALTY = 0.4;
+// ─── Tunable params interface — cho live editing từ debug panel UI ────────────
+export interface WorldgenParams {
+  // Noise frequencies (calibrated cho 128 minDim grid).
+  elevationFreq: number;
+  elevationOctaves: number;
+  moistureFreq: number;
+  moistureOctaves: number;
+  moistureBias: number;
+  temperatureFreq: number;
+  temperatureOctaves: number;
+  // Field combination weights.
+  radialFalloffWeight: number;
+  elevNoiseWeight: number;
+  elevFalloffPower: number;
+  elevCurvePower: number;
+  temperatureLatitudeWeight: number;
+  temperatureNoiseWeight: number;
+  temperatureElevPenalty: number;
+  // Classification thresholds.
+  seaLevel: number;
+  coastBand: number;
+  mountainLevel: number;
+  hillBand: number;
+  swampMoisture: number;
+  swampElevBand: number;
+  forestMoisture: number;
+  desertMoisture: number;
+  desertTemperature: number;
+  urbanProbability: number;
+  // Macro cohesion (Phase 1.5).
+  smoothingPasses: number;
+  oceanFillNeighbors: number;
+  elevBlurPasses: number;
+  moistureBlurPasses: number;
+  minComponentSize: number;
+}
 
-// Classification thresholds (re-tuned for distribution balance).
-const SEA_LEVEL = 0.40;          // 0.42 → 0.40 (slightly more land).
-const COAST_BAND = 0.05;         // 0.04 → 0.05 (wider coast ring).
-const MOUNTAIN_LEVEL = 0.70;     // 0.78 → 0.70 (more mountain visible after elev blur compresses range).
-const HILL_BAND = 0.14;          // wider hill ring around mountains.
-const SWAMP_MOISTURE = 0.70;     // 0.68 → 0.70 (rarer swamp).
-const SWAMP_ELEV_BAND = 0.18;    // tighter swamp zone (low elev only).
-const FOREST_MOISTURE = 0.55;
-const DESERT_MOISTURE = 0.35;    // 0.38 → 0.35 (desert rarer).
-const DESERT_TEMPERATURE = 0.55; // 0.50 → 0.55 (desert chỉ ở zone really warm).
-const URBAN_PROBABILITY = 0.006;
-const SMOOTHING_PASSES = 5;
-const OCEAN_FILL_NEIGHBORS = 4;
-// Phase 1.5 — macro region cohesion (kill speckle):
-const ELEV_BLUR_PASSES = 3;       // 2 → 3 (smoother elevation field).
-const MOISTURE_BLUR_PASSES = 3;   // 2 → 3 (smoother moisture, less Forest speckle).
-const MIN_COMPONENT_SIZE = 12;    // 6 → 12 (kill bigger forest/desert speckles, force mảng liền mạch).
+export const DEFAULT_WORLDGEN_PARAMS: WorldgenParams = {
+  elevationFreq: 1.8,
+  elevationOctaves: 5,
+  moistureFreq: 3,
+  moistureOctaves: 4,
+  moistureBias: 0,
+  temperatureFreq: 3,
+  temperatureOctaves: 2,
+  radialFalloffWeight: 0.20,
+  elevNoiseWeight: 0.80,
+  elevFalloffPower: 1.5,
+  elevCurvePower: 0.90,
+  temperatureLatitudeWeight: 0.85,
+  temperatureNoiseWeight: 0.15,
+  temperatureElevPenalty: 0.4,
+  seaLevel: 0.40,
+  coastBand: 0.05,
+  mountainLevel: 0.70,
+  hillBand: 0.14,
+  swampMoisture: 0.70,
+  swampElevBand: 0.18,
+  forestMoisture: 0.55,
+  desertMoisture: 0.35,
+  desertTemperature: 0.55,
+  urbanProbability: 0.006,
+  smoothingPasses: 5,
+  oceanFillNeighbors: 4,
+  elevBlurPasses: 3,
+  moistureBlurPasses: 3,
+  minComponentSize: 12,
+};
+
+// ─── Presets (multiple realistic configurations) ──────────────────────────────
+export const WORLDGEN_PRESETS: Record<string, { name: string; description: string; params: Partial<WorldgenParams> }> = {
+  balanced: {
+    name: 'Balanced',
+    description: 'Cân bằng đất/nước/rừng/núi mặc định',
+    params: {},
+  },
+  dry: {
+    name: 'Dry Continent',
+    description: 'Lục địa khô — nhiều sa mạc, ít rừng',
+    params: {
+      seaLevel: 0.32,
+      moistureBias: -0.20,
+      desertMoisture: 0.42,
+      forestMoisture: 0.65,
+    },
+  },
+  wet: {
+    name: 'Wet World',
+    description: 'Thế giới ẩm — nhiều rừng, nhiều đầm lầy, ít sa mạc',
+    params: {
+      seaLevel: 0.45,
+      moistureBias: +0.18,
+      forestMoisture: 0.45,
+      swampMoisture: 0.60,
+      desertMoisture: 0.20,
+    },
+  },
+  mountainous: {
+    name: 'Mountainous',
+    description: 'Nhiều núi cao — dãy núi rộng + nhiều đồi',
+    params: {
+      mountainLevel: 0.55,
+      hillBand: 0.20,
+      elevCurvePower: 0.75,
+    },
+  },
+  archipelago: {
+    name: 'Archipelago',
+    description: 'Quần đảo — nhiều đảo nhỏ rời rạc',
+    params: {
+      seaLevel: 0.55,
+      radialFalloffWeight: 0.10,
+      minComponentSize: 4,
+      elevBlurPasses: 1,
+    },
+  },
+  pangaea: {
+    name: 'Pangaea',
+    description: 'Siêu lục địa — đất chiếm phần lớn map',
+    params: {
+      seaLevel: 0.30,
+      radialFalloffWeight: 0.35,
+      coastBand: 0.04,
+    },
+  },
+  tropical: {
+    name: 'Tropical',
+    description: 'Vùng nhiệt đới — toàn cầu nóng, rừng dày, không sa mạc lạnh',
+    params: {
+      moistureBias: +0.10,
+      desertTemperature: 0.75,
+      forestMoisture: 0.50,
+      temperatureLatitudeWeight: 0.50,
+    },
+  },
+  arctic: {
+    name: 'Arctic',
+    description: 'Vùng cực lạnh — sa mạc rất hiếm, rừng chiếm ưu thế',
+    params: {
+      desertTemperature: 0.85,
+      moistureBias: +0.05,
+      temperatureLatitudeWeight: 1.0,
+    },
+  },
+};
 
 /**
  * Phase 1 worldgen — V2 reference (demo/index.html) ported.
@@ -188,7 +298,7 @@ const MIN_COMPONENT_SIZE = 12;    // 6 → 12 (kill bigger forest/desert speckle
  *
  * Coast as elev band (no BFS) = simpler + deterministic per V2 reference.
  */
-function generateTerrainMap(rows: number, cols: number, seed: number): Uint8Array {
+function generateTerrainMap(rows: number, cols: number, seed: number, params: WorldgenParams): Uint8Array {
   const map = new Uint8Array(rows * cols);
   const total = rows * cols;
 
@@ -208,38 +318,37 @@ function generateTerrainMap(rows: number, cols: number, seed: number): Uint8Arra
       const fx = c / cols;
       const fy = r / rows;
 
-      // Radial falloff cho continent shape (soft power 2.4).
+      // Radial falloff cho continent shape.
       const ndx = (fx - 0.5) * 2;
       const ndy = (fy - 0.5) * 2;
       const dist = Math.sqrt(ndx * ndx + ndy * ndy);
-      const radial = Math.max(0, 1 - Math.pow(dist, ELEV_FALLOFF_POWER));
+      const radial = Math.max(0, 1 - Math.pow(dist, params.elevFalloffPower));
 
-      // Elevation: 6-octave fbm * 0.7 + radial * 0.3, ^0.85 curve.
-      let elev = octaveNoise(elevNoise, fx, fy, ELEVATION_OCTAVES, ELEVATION_FREQ);
-      elev = elev * ELEV_NOISE_WEIGHT + radial * RADIAL_FALLOFF_WEIGHT;
-      elev = Math.pow(Math.max(0, Math.min(1, elev)), ELEV_CURVE_POWER);
+      // Elevation: fbm * weight + radial * weight, ^curve.
+      let elev = octaveNoise(elevNoise, fx, fy, params.elevationOctaves, params.elevationFreq);
+      elev = elev * params.elevNoiseWeight + radial * params.radialFalloffWeight;
+      elev = Math.pow(Math.max(0, Math.min(1, elev)), params.elevCurvePower);
       elevation[idx] = elev;
 
-      // Moisture: 4-octave fbm + bias.
-      let moist = octaveNoise(moistureNoise, fx, fy, MOISTURE_OCTAVES, MOISTURE_FREQ);
-      moist = Math.max(0, Math.min(1, moist + MOISTURE_BIAS));
+      // Moisture: fbm + bias.
+      let moist = octaveNoise(moistureNoise, fx, fy, params.moistureOctaves, params.moistureFreq);
+      moist = Math.max(0, Math.min(1, moist + params.moistureBias));
       moisture[idx] = moist;
 
       // Temperature: latitude-based + small noise + elev penalty.
-      const lat = Math.abs(fy - 0.5) * 2; // 0 at equator, 1 at poles
-      const tn = octaveNoise(tempNoise, fx, fy, TEMPERATURE_OCTAVES, TEMPERATURE_FREQ);
-      let temp = (1 - lat) * TEMPERATURE_LATITUDE_WEIGHT + tn * TEMPERATURE_NOISE_WEIGHT;
-      temp -= Math.max(0, elev - SEA_LEVEL) * TEMPERATURE_ELEV_PENALTY;
+      const lat = Math.abs(fy - 0.5) * 2;
+      const tn = octaveNoise(tempNoise, fx, fy, params.temperatureOctaves, params.temperatureFreq);
+      let temp = (1 - lat) * params.temperatureLatitudeWeight + tn * params.temperatureNoiseWeight;
+      temp -= Math.max(0, elev - params.seaLevel) * params.temperatureElevPenalty;
       temperature[idx] = Math.max(0, Math.min(1, temp));
     }
   }
 
-  // Pass 1.5: blur elevation + moisture fields BEFORE classification (Phase 1.5).
-  // Smooth the field → cells gần nhau hơn nhau ít → cùng terrain class → mảng liền mạch.
-  for (let pass = 0; pass < ELEV_BLUR_PASSES; pass++) {
+  // Pass 1.5: blur elevation + moisture fields BEFORE classification.
+  for (let pass = 0; pass < params.elevBlurPasses; pass++) {
     boxBlur(elevation, rows, cols);
   }
-  for (let pass = 0; pass < MOISTURE_BLUR_PASSES; pass++) {
+  for (let pass = 0; pass < params.moistureBlurPasses; pass++) {
     boxBlur(moisture, rows, cols);
   }
 
@@ -249,23 +358,19 @@ function generateTerrainMap(rows: number, cols: number, seed: number): Uint8Arra
     const moist = moisture[i]!;
     const temp = temperature[i]!;
 
-    if (elev < SEA_LEVEL) {
+    if (elev < params.seaLevel) {
       map[i] = Terrain.Ocean;
-    } else if (elev < SEA_LEVEL + COAST_BAND) {
-      // Coast = elev band, no BFS needed (deterministic).
+    } else if (elev < params.seaLevel + params.coastBand) {
       map[i] = Terrain.Coast;
-    } else if (moist > SWAMP_MOISTURE && elev < SEA_LEVEL + SWAMP_ELEV_BAND) {
-      // Swamp = wet lowland near coast.
+    } else if (moist > params.swampMoisture && elev < params.seaLevel + params.swampElevBand) {
       map[i] = Terrain.Swamp;
-    } else if (elev > MOUNTAIN_LEVEL) {
+    } else if (elev > params.mountainLevel) {
       map[i] = Terrain.Mountain;
-    } else if (elev > MOUNTAIN_LEVEL - HILL_BAND) {
-      // Hill = elev band below mountain (smooth transition).
+    } else if (elev > params.mountainLevel - params.hillBand) {
       map[i] = Terrain.Hill;
-    } else if (moist < DESERT_MOISTURE && temp > DESERT_TEMPERATURE) {
-      // Desert needs warm temp (blocks polar deserts).
+    } else if (moist < params.desertMoisture && temp > params.desertTemperature) {
       map[i] = Terrain.Desert;
-    } else if (moist > FOREST_MOISTURE) {
+    } else if (moist > params.forestMoisture) {
       map[i] = Terrain.Forest;
     } else {
       map[i] = Terrain.Plains;
@@ -273,20 +378,18 @@ function generateTerrainMap(rows: number, cols: number, seed: number): Uint8Arra
   }
 
   // Pass 3: smoothing — neighbor-majority để remove 1-cell speckles.
-  for (let pass = 0; pass < SMOOTHING_PASSES; pass++) {
-    smoothMap(map, rows, cols);
+  for (let pass = 0; pass < params.smoothingPasses; pass++) {
+    smoothMap(map, rows, cols, params.oceanFillNeighbors);
   }
 
-  // Pass 3.5: flood-fill component cleanup (Phase 1.5).
-  // Find connected same-terrain regions; merge any < MIN_COMPONENT_SIZE vào dominant
-  // neighbor terrain. Kill last speckle that survives smoothing.
-  mergeSmallComponents(map, rows, cols, MIN_COMPONENT_SIZE);
+  // Pass 3.5: flood-fill component cleanup.
+  mergeSmallComponents(map, rows, cols, params.minComponentSize);
 
-  // Pass 4: Urban sparse overlay trên Plains/Coast/Hill (rare).
+  // Pass 4: Urban sparse overlay trên Plains/Coast/Hill.
   const urbanRng = mulberry32(seed * 2027 + 31);
   for (let i = 0; i < total; i++) {
     const t = map[i];
-    if ((t === Terrain.Plains || t === Terrain.Coast || t === Terrain.Hill) && urbanRng() < URBAN_PROBABILITY) {
+    if ((t === Terrain.Plains || t === Terrain.Coast || t === Terrain.Hill) && urbanRng() < params.urbanProbability) {
       map[i] = Terrain.Urban;
     }
   }
@@ -320,7 +423,7 @@ function getOffsetNeighbors(c: number, r: number): ReadonlyArray<readonly [numbe
  *   - Other land cell: switch to dominant neighbor if outnumbered ≥ 65%
  *   - Block conversion INTO Ocean unless self has zero same-terrain neighbors (peninsula erosion)
  */
-function smoothMap(map: Uint8Array, rows: number, cols: number): void {
+function smoothMap(map: Uint8Array, rows: number, cols: number, oceanFillNeighbors: number): void {
   const original = new Uint8Array(map);
   const counts = new Uint8Array(8);
   for (let r = 0; r < rows; r++) {
@@ -342,7 +445,7 @@ function smoothMap(map: Uint8Array, rows: number, cols: number): void {
 
       // Special case: Ocean cell surrounded by land → fill (kill ocean speckle inside continent).
       if (self === Terrain.Ocean) {
-        if (landNeighborCount >= OCEAN_FILL_NEIGHBORS) {
+        if (landNeighborCount >= oceanFillNeighbors) {
           // Pick most common LAND neighbor terrain.
           let bestLand: Terrain = Terrain.Plains;
           let bestCount = 0;

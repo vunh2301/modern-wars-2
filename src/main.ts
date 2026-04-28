@@ -18,6 +18,8 @@ import { createHexLayer } from './render/hexLayer';
 import { createMeshHexLayer } from './render/meshHexLayer';
 import { createBenchmark } from './render/benchmark';
 import { createSandboxLayer } from './sandbox/sandboxLayer';
+import { createDebugPanel } from './sandbox/sandboxDebugPanel';
+import { DEFAULT_WORLDGEN_PARAMS } from './sandbox/sandboxData';
 import { loadManifest } from './data/manifest';
 import { loadCountries } from './data/countries';
 import { loadTier } from './data/tiers';
@@ -110,6 +112,16 @@ async function bootstrapSandbox(
   };
 
   viewport.on('zoomed', () => { w.__mwZoom = viewport.scale.x; });
+
+  // Mount debug panel — replace ?seed/?rows/?cols URL params với floating UI.
+  // Live regenerate: panel slider/preset → sandbox.regenerate(seed, params).
+  createDebugPanel({
+    initial: { seed, params: { ...DEFAULT_WORLDGEN_PARAMS } },
+    onRegenerate: ({ seed: newSeed, params: newParams }) => {
+      sandbox.regenerate(newSeed, newParams);
+      w.__mwHexCount = sandbox.hexCount;
+    },
+  });
 
   performance.mark('boot-end');
   performance.measure('boot-to-playable', 'boot-start', 'boot-end');
