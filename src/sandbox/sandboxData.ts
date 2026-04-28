@@ -30,7 +30,8 @@ const FAN_INDICES = new Uint32Array([
 ]);
 
 // ─── Terrain palette ──────────────────────────────────────────────────────────
-// 7 terrain types cho modern war RTS world map. RGB tuple + future gameplay.
+// 9 terrain types cho modern war RTS world map. RGB tuple + future gameplay.
+// Phase 1 worldgen upgrade: + Hill (smooth mountain↔plain) + Swamp (wet lowland).
 type RGBA = readonly [number, number, number, number];
 
 export const enum Terrain {
@@ -41,9 +42,13 @@ export const enum Terrain {
   Mountain = 4, // very slow, +50% defense, naturally fortified
   Urban = 5,    // city blocks, +40% defense, controllable
   Desert = 6,   // arid plains, fast move, low defense, low moisture
+  Hill = 7,     // elev band below mountain, +20% defense, transition biome
+  Swamp = 8,    // wet lowland, slow move, +15% defense, near coast
 }
 
-// Indexed by Terrain enum value (0..6) for direct number lookup.
+// Indexed by Terrain enum value (0..8) for direct number lookup.
+// Note: shader (sandboxShader.ts) hiện chỉ có procedural texture branches cho
+// terrain 0..6. Hill (7) + Swamp (8) chỉ hiển thị base color (Phase 1 acceptable).
 const TERRAIN_COLORS: ReadonlyArray<RGBA> = [
   [14, 33, 64, 255],    // 0 Ocean    #0e2140 deep blue
   [30, 69, 112, 255],   // 1 Coast    #1e4570 lighter blue
@@ -52,6 +57,8 @@ const TERRAIN_COLORS: ReadonlyArray<RGBA> = [
   [110, 94, 84, 255],   // 4 Mountain #6e5e54 gray-brown
   [74, 74, 74, 255],    // 5 Urban    #4a4a4a dark gray
   [196, 168, 120, 255], // 6 Desert   #c4a878 sandy yellow
+  [138, 138, 74, 255],  // 7 Hill     #8a8a4a olive-brown (foothills)
+  [61, 82, 64, 255],    // 8 Swamp    #3d5240 dark moss green
 ];
 
 // ─── Generator ────────────────────────────────────────────────────────────────
@@ -121,145 +128,144 @@ export function generateSandboxData(rows = 64, cols = 64, seed = 1): SandboxBuff
 }
 
 // ─── Tunable constants ────────────────────────────────────────────────────────
-// Terrain generation knobs. Tune để rebalance landmass / mountain chains / etc.
-const CONTINENT_FREQ = 1.0;     // low-freq base shape — LOWER = bigger smoother continents.
-const DETAIL_FREQ = 4;          // medium-freq coastline irregularity.
-const RIDGE_FREQ = 3.5;         // mountain chain freq.
-const MOISTURE_FREQ = 2.5;
-const RADIAL_FALLOFF_WEIGHT = 0.30; // edge ocean bias (lower = land reaches near edge).
-const LANDSCORE_BLUR_PASSES = 2; // box blur landScore field BEFORE classification (kills speckle).
-const SEA_LEVEL = 0.46;         // landScore < this → Ocean.
-const RIDGE_THRESHOLD = 0.78;
-const ELEVATION_MOUNTAIN_MIN = 0.55;
-const FOREST_MOISTURE = 0.58;
-const DESERT_MOISTURE = 0.32;
+// Phase 1 worldgen upgrade — based on demo/index.html V2 reference formula.
+const ELEVATION_FREQ = 4;        // base freq cho 6-octave fbm (continent scale).
+const ELEVATION_OCTAVES = 6;     // smooth multi-scale terrain.
+const RADIAL_FALLOFF_WEIGHT = 0.30; // 70/30 noise/radial split.
+const ELEV_NOISE_WEIGHT = 0.70;
+const ELEV_FALLOFF_POWER = 2.4;  // soft falloff (1 - dist^2.4).
+const ELEV_CURVE_POWER = 0.85;   // ^0.85 push values toward higher band.
+const MOISTURE_FREQ = 4;
+const MOISTURE_OCTAVES = 4;
+const MOISTURE_BIAS = 0;         // tunable: -0.4..+0.4 (wet/dry world).
+const TEMPERATURE_FREQ = 5;      // small noise overlay on latitude gradient.
+const TEMPERATURE_OCTAVES = 3;
+const TEMPERATURE_LATITUDE_WEIGHT = 0.85;
+const TEMPERATURE_NOISE_WEIGHT = 0.15;
+const TEMPERATURE_ELEV_PENALTY = 0.4; // mountain cells colder.
+
+// Classification thresholds.
+const SEA_LEVEL = 0.42;          // elev < this → Ocean.
+const COAST_BAND = 0.04;         // elev < SEA_LEVEL + this → Coast (deterministic, no BFS).
+const MOUNTAIN_LEVEL = 0.66;     // elev > this → Mountain.
+const HILL_BAND = 0.10;          // elev > MOUNTAIN_LEVEL - this → Hill.
+const SWAMP_MOISTURE = 0.68;     // moisture > this + low elev → Swamp.
+const SWAMP_ELEV_BAND = 0.20;    // elev < SEA_LEVEL + this for Swamp.
+const FOREST_MOISTURE = 0.55;
+const DESERT_MOISTURE = 0.38;
+const DESERT_TEMPERATURE = 0.50; // desert cần warm zone (block polar deserts).
 const URBAN_PROBABILITY = 0.006;
-const SMOOTHING_PASSES = 4;     // more passes = smoother coastlines, less speckle.
-const OCEAN_FILL_NEIGHBORS = 5; // ocean cell becomes land if >= N of 6 neighbors are land.
-const PROXIMITY_WATER_RANGE = 8;
+const SMOOTHING_PASSES = 3;      // smoothing kills speckle (kept from prior).
+const OCEAN_FILL_NEIGHBORS = 5;  // ocean cell với >= N land neighbors → fill.
 
 /**
- * Terrain map generator — realistic macro structure.
+ * Phase 1 worldgen — V2 reference (demo/index.html) ported.
  *
  * Pipeline:
- *   1. Compute fields: continent / elevation / ridge / raw moisture
- *   2. Initial classification: ocean vs land via landScore
- *   3. BFS distance-to-ocean cho proximityWater
- *   4. Refine land: Mountain (ridge+elev) → Forest (moist) → Desert (dry) → Plains
- *   5. Smoothing 2 passes (neighbor-majority, protect Mountain/Ocean)
- *   6. Coast pass (after smoothing) — land hex giáp ocean
- *   7. Urban sparse trên Plains/Coast
+ *   1. Compute fields per cell:
+ *      - elevation = fbm(6 oct) * 0.7 + radialFalloff^2.4 * 0.3, then ^0.85
+ *      - moisture  = fbm(4 oct) + bias
+ *      - temperature = (1 - latitude) * 0.85 + fbm(3 oct) * 0.15 - elev penalty
+ *   2. Classify per cell (priority order):
+ *      - Ocean       elev < SEA_LEVEL
+ *      - Coast       elev < SEA_LEVEL + COAST_BAND  (deterministic, no BFS)
+ *      - Swamp       moist > 0.68 + low elev
+ *      - Mountain    elev > MOUNTAIN_LEVEL
+ *      - Hill        elev > MOUNTAIN_LEVEL - HILL_BAND
+ *      - Desert      moist < 0.38 + temp > 0.50  (block polar deserts)
+ *      - Forest      moist > 0.55
+ *      - Plains      default
+ *   3. Smoothing 3 passes (neighbor-majority, Ocean-fill protection cho Mountain).
+ *   4. Urban sparse overlay trên Plains/Coast (rare).
+ *
+ * Coast as elev band (no BFS) = simpler + deterministic per V2 reference.
  */
 function generateTerrainMap(rows: number, cols: number, seed: number): Uint8Array {
   const map = new Uint8Array(rows * cols);
   const total = rows * cols;
 
   // Independent noise generators — different seed multipliers cho decorrelation.
-  const continentNoise = makeValueNoise(seed * 73 + 1);
-  const detailNoise = makeValueNoise(seed * 211 + 7);
-  const moistNoise = makeValueNoise(seed * 1531 + 17);
-  const ridgeNoise = makeValueNoise(seed * 2789 + 11);
+  const elevNoise = makeValueNoise(seed * 73 + 1);
+  const moistureNoise = makeValueNoise(seed * 1531 + 17);
+  const tempNoise = makeValueNoise(seed * 2789 + 11);
 
-  const landScore = new Float32Array(total);
   const elevation = new Float32Array(total);
-  const ridge = new Float32Array(total);
-  const rawMoisture = new Float32Array(total);
+  const moisture = new Float32Array(total);
+  const temperature = new Float32Array(total);
 
-  // Pass 1: compute raw fields per cell.
+  // Pass 1: compute fields per cell using V2 demo formula.
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
       const idx = r * cols + c;
       const fx = c / cols;
       const fy = r / rows;
 
-      // Radial falloff: 1.0 at center, 0 at corners (creates continent illusion).
-      const dx = (fx - 0.5) * 2;
-      const dy = (fy - 0.5) * 2;
-      const radial = Math.max(0, 1 - Math.sqrt(dx * dx + dy * dy));
+      // Radial falloff cho continent shape (soft power 2.4).
+      const ndx = (fx - 0.5) * 2;
+      const ndy = (fy - 0.5) * 2;
+      const dist = Math.sqrt(ndx * ndx + ndy * ndy);
+      const radial = Math.max(0, 1 - Math.pow(dist, ELEV_FALLOFF_POWER));
 
-      const lowFreq = octaveNoise(continentNoise, fx, fy, 2, CONTINENT_FREQ);
-      const medFreq = octaveNoise(detailNoise, fx, fy, 3, DETAIL_FREQ);
-      landScore[idx] =
-        lowFreq * (1 - RADIAL_FALLOFF_WEIGHT - 0.20) +
-        medFreq * 0.20 +
-        radial * RADIAL_FALLOFF_WEIGHT;
+      // Elevation: 6-octave fbm * 0.7 + radial * 0.3, ^0.85 curve.
+      let elev = octaveNoise(elevNoise, fx, fy, ELEVATION_OCTAVES, ELEVATION_FREQ);
+      elev = elev * ELEV_NOISE_WEIGHT + radial * RADIAL_FALLOFF_WEIGHT;
+      elev = Math.pow(Math.max(0, Math.min(1, elev)), ELEV_CURVE_POWER);
+      elevation[idx] = elev;
 
-      elevation[idx] = landScore[idx]! * 0.72 + medFreq * 0.28;
+      // Moisture: 4-octave fbm + bias.
+      let moist = octaveNoise(moistureNoise, fx, fy, MOISTURE_OCTAVES, MOISTURE_FREQ);
+      moist = Math.max(0, Math.min(1, moist + MOISTURE_BIAS));
+      moisture[idx] = moist;
 
-      const rNoise = octaveNoise(ridgeNoise, fx, fy, 3, RIDGE_FREQ);
-      ridge[idx] = 1 - Math.abs(2 * rNoise - 1);
-
-      rawMoisture[idx] = octaveNoise(moistNoise, fx, fy, 2, MOISTURE_FREQ);
+      // Temperature: latitude-based + small noise + elev penalty.
+      const lat = Math.abs(fy - 0.5) * 2; // 0 at equator, 1 at poles
+      const tn = octaveNoise(tempNoise, fx, fy, TEMPERATURE_OCTAVES, TEMPERATURE_FREQ);
+      let temp = (1 - lat) * TEMPERATURE_LATITUDE_WEIGHT + tn * TEMPERATURE_NOISE_WEIGHT;
+      temp -= Math.max(0, elev - SEA_LEVEL) * TEMPERATURE_ELEV_PENALTY;
+      temperature[idx] = Math.max(0, Math.min(1, temp));
     }
   }
 
-  // Pass 1.5: smooth landScore field BEFORE binary classification.
-  // Reduces threshold-zone speckle (cells loanh quanh SEA_LEVEL).
-  for (let pass = 0; pass < LANDSCORE_BLUR_PASSES; pass++) {
-    boxBlur(landScore, rows, cols);
-  }
-
-  // Pass 1.6: binary ocean/land split using smoothed landScore.
+  // Pass 2: classify per cell theo priority order.
   for (let i = 0; i < total; i++) {
-    map[i] = landScore[i]! < SEA_LEVEL ? Terrain.Ocean : Terrain.Plains;
-  }
-
-  // Pass 2: BFS distance-to-ocean (Manhattan-ish via offset hex neighbors).
-  const distToOcean = computeDistanceToOcean(map, rows, cols);
-
-  // Pass 3: refine land classification.
-  for (let i = 0; i < total; i++) {
-    if (map[i] === Terrain.Ocean) continue;
-
     const elev = elevation[i]!;
-    const ri = ridge[i]!;
+    const moist = moisture[i]!;
+    const temp = temperature[i]!;
 
-    // Mountain — high ridge + high elevation (forms chains, not isolated dots).
-    if (ri > RIDGE_THRESHOLD && elev > ELEVATION_MOUNTAIN_MIN) {
+    if (elev < SEA_LEVEL) {
+      map[i] = Terrain.Ocean;
+    } else if (elev < SEA_LEVEL + COAST_BAND) {
+      // Coast = elev band, no BFS needed (deterministic).
+      map[i] = Terrain.Coast;
+    } else if (moist > SWAMP_MOISTURE && elev < SEA_LEVEL + SWAMP_ELEV_BAND) {
+      // Swamp = wet lowland near coast.
+      map[i] = Terrain.Swamp;
+    } else if (elev > MOUNTAIN_LEVEL) {
       map[i] = Terrain.Mountain;
-      continue;
-    }
-
-    // Moisture: noise * 0.6 + proximity-to-water * 0.25 - elevation penalty * 0.15.
-    const proximity = Math.max(0, 1 - distToOcean[i]! / PROXIMITY_WATER_RANGE);
-    const moisture = rawMoisture[i]! * 0.6 + proximity * 0.25 - elev * 0.15 + 0.15;
-
-    if (moisture > FOREST_MOISTURE) {
-      map[i] = Terrain.Forest;
-    } else if (moisture < DESERT_MOISTURE) {
+    } else if (elev > MOUNTAIN_LEVEL - HILL_BAND) {
+      // Hill = elev band below mountain (smooth transition).
+      map[i] = Terrain.Hill;
+    } else if (moist < DESERT_MOISTURE && temp > DESERT_TEMPERATURE) {
+      // Desert needs warm temp (blocks polar deserts).
       map[i] = Terrain.Desert;
+    } else if (moist > FOREST_MOISTURE) {
+      map[i] = Terrain.Forest;
     } else {
       map[i] = Terrain.Plains;
     }
   }
 
-  // Pass 4: smoothing — neighbor-majority để remove 1-cell speckles.
-  // Protect Ocean + Mountain (preserve macro shape).
+  // Pass 3: smoothing — neighbor-majority để remove 1-cell speckles.
+  // Ocean fill protection cho Mountain (chains preserved).
   for (let pass = 0; pass < SMOOTHING_PASSES; pass++) {
     smoothMap(map, rows, cols);
   }
 
-  // Pass 5: Coast detection (after smoothing, before Urban).
-  const beforeCoast = new Uint8Array(map);
-  for (let r = 0; r < rows; r++) {
-    for (let c = 0; c < cols; c++) {
-      const idx = r * cols + c;
-      if (beforeCoast[idx] === Terrain.Ocean) continue;
-      if (beforeCoast[idx] === Terrain.Mountain) continue;
-      for (const [nc, nr] of getOffsetNeighbors(c, r)) {
-        if (nr < 0 || nr >= rows || nc < 0 || nc >= cols) continue;
-        if (beforeCoast[nr * cols + nc] === Terrain.Ocean) {
-          map[idx] = Terrain.Coast;
-          break;
-        }
-      }
-    }
-  }
-
-  // Pass 6: Urban — sparse random trên Plains/Coast (rare, < 1% chance).
+  // Pass 4: Urban sparse overlay trên Plains/Coast/Hill (rare).
   const urbanRng = mulberry32(seed * 2027 + 31);
   for (let i = 0; i < total; i++) {
-    if ((map[i] === Terrain.Plains || map[i] === Terrain.Coast) && urbanRng() < URBAN_PROBABILITY) {
+    const t = map[i];
+    if ((t === Terrain.Plains || t === Terrain.Coast || t === Terrain.Hill) && urbanRng() < URBAN_PROBABILITY) {
       map[i] = Terrain.Urban;
     }
   }
