@@ -131,17 +131,21 @@ export function generateSandboxData(rows = 64, cols = 64, seed = 1): SandboxBuff
 // Phase 1 worldgen — V2 demo formula. Re-tuned sau test trên iPhone (center
 // quá nhiều mountain, edge quá speckle). Reduced radial bias + raised mountain
 // threshold + sharper falloff.
-const ELEVATION_FREQ = 3;        // base freq cho 6-octave fbm. Lower = bigger continents.
-const ELEVATION_OCTAVES = 6;
-const RADIAL_FALLOFF_WEIGHT = 0.20; // dropped 0.30 → 0.20 (center elev không bị push lên Mountain).
-const ELEV_NOISE_WEIGHT = 0.80;     // dropped 0.70 → 0.80 (noise dominate, không phải radial).
-const ELEV_FALLOFF_POWER = 1.5;     // dropped 2.4 → 1.5 (sharper falloff, less center plateau).
-const ELEV_CURVE_POWER = 0.90;      // 0.85 → 0.90 (gentler curve, less push toward high).
-const MOISTURE_FREQ = 4;
-const MOISTURE_OCTAVES = 4;
+// Noise frequencies — calibrated cho 64×64 grid để tránh top-octave speckle.
+// Demo dùng 160×100 map nên cùng freq smooth hơn.
+// Math: top octave = baseFreq * 2^(octaves-1). ÷ 64 cells = cycles per cell.
+// Want < 0.3 cycles/cell ở top octave = neighbors share noise sample.
+const ELEVATION_FREQ = 1.5;       // base freq. Top = 1.5 * 8 = 12 = 0.19 cycles/cell ✓
+const ELEVATION_OCTAVES = 4;      // dropped 6 → 4 (top 16x → 8x = giảm grain).
+const RADIAL_FALLOFF_WEIGHT = 0.20;
+const ELEV_NOISE_WEIGHT = 0.80;
+const ELEV_FALLOFF_POWER = 1.5;
+const ELEV_CURVE_POWER = 0.90;
+const MOISTURE_FREQ = 2;          // top = 2 * 4 = 8 = 0.125 cycles/cell ✓
+const MOISTURE_OCTAVES = 3;       // dropped 4 → 3.
 const MOISTURE_BIAS = 0;
-const TEMPERATURE_FREQ = 5;
-const TEMPERATURE_OCTAVES = 3;
+const TEMPERATURE_FREQ = 2;       // top = 2 * 2 = 4 = 0.06 cycles/cell ✓
+const TEMPERATURE_OCTAVES = 2;    // dropped 3 → 2 (latitude dominates anyway).
 const TEMPERATURE_LATITUDE_WEIGHT = 0.85;
 const TEMPERATURE_NOISE_WEIGHT = 0.15;
 const TEMPERATURE_ELEV_PENALTY = 0.4;
@@ -157,8 +161,8 @@ const FOREST_MOISTURE = 0.55;
 const DESERT_MOISTURE = 0.35;    // 0.38 → 0.35 (desert rarer).
 const DESERT_TEMPERATURE = 0.55; // 0.50 → 0.55 (desert chỉ ở zone really warm).
 const URBAN_PROBABILITY = 0.006;
-const SMOOTHING_PASSES = 3;
-const OCEAN_FILL_NEIGHBORS = 5;
+const SMOOTHING_PASSES = 5;       // bumped 3 → 5 (more aggressive denoise).
+const OCEAN_FILL_NEIGHBORS = 4;   // 5 → 4 (more aggressive ocean speckle fill).
 
 /**
  * Phase 1 worldgen — V2 reference (demo/index.html) ported.
