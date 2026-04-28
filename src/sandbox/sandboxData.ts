@@ -301,7 +301,7 @@ function computeDistanceToOcean(map: Uint8Array, rows: number, cols: number): Ui
     for (const [nc, nr] of getOffsetNeighbors(c, r)) {
       if (nr < 0 || nr >= rows || nc < 0 || nc >= cols) continue;
       const nIdx = nr * cols + nc;
-      if (dist[nIdx] > d + 1) {
+      if (dist[nIdx]! > d + 1) {
         dist[nIdx] = d + 1;
         queue.push(nIdx);
       }
