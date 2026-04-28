@@ -46,21 +46,17 @@ export const enum Terrain {
   Swamp = 8,    // wet lowland, slow move, +15% defense, near coast
 }
 
-// Palette match demo/index.html V2 reference (verified visually readable):
-//   - Coast = sand beach (warm tan), không phải shallow water
-//   - Plains = bright lime green, không phải khaki/dry
-//   - Mountain = cool blue-gray rock, không phải warm brown
-//   - Desert = bright yellow (clear distinction từ tan coast)
+// Indexed by Terrain enum value (0..8) for direct number lookup.
 const TERRAIN_COLORS: ReadonlyArray<RGBA> = [
-  [26, 58, 92, 255],     // 0 Ocean    #1a3a5c mid-blue (cool, not too dark)
-  [232, 212, 160, 255],  // 1 Coast    #e8d4a0 sand beach (warm tan)
-  [155, 198, 106, 255],  // 2 Plains   #9bc66a bright lime green (verdant)
-  [44, 94, 52, 255],     // 3 Forest   #2c5e34 dark green
-  [125, 133, 144, 255],  // 4 Mountain #7d8590 cool blue-gray rock
-  [74, 74, 74, 255],     // 5 Urban    #4a4a4a dark gray
-  [232, 201, 90, 255],   // 6 Desert   #e8c95a bright dry yellow
-  [138, 138, 74, 255],   // 7 Hill     #8a8a4a olive-brown (foothills)
-  [61, 82, 64, 255],     // 8 Swamp    #3d5240 dark moss green
+  [14, 33, 64, 255],    // 0 Ocean    #0e2140 deep blue
+  [30, 69, 112, 255],   // 1 Coast    #1e4570 lighter blue
+  [156, 138, 85, 255],  // 2 Plains   #9c8a55 khaki-green
+  [46, 94, 44, 255],    // 3 Forest   #2e5e2c dark green
+  [110, 94, 84, 255],   // 4 Mountain #6e5e54 gray-brown
+  [74, 74, 74, 255],    // 5 Urban    #4a4a4a dark gray
+  [196, 168, 120, 255], // 6 Desert   #c4a878 sandy yellow
+  [138, 138, 74, 255],  // 7 Hill     #8a8a4a olive-brown
+  [61, 82, 64, 255],    // 8 Swamp    #3d5240 dark moss green
 ];
 
 // ─── Generator ────────────────────────────────────────────────────────────────
