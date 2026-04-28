@@ -29,8 +29,8 @@ export interface SandboxLayer {
 
 export function createSandboxLayer(
   _app: Application,
-  rows = 64,
-  cols = 64,
+  rows = 256,
+  cols = 128,
   seed = 1,
 ): SandboxLayer {
   const root = new Container();

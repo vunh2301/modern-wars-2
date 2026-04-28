@@ -71,8 +71,8 @@ async function bootstrapSandbox(
 ): Promise<void> {
   const params = new URLSearchParams(location.search);
   const seed = parseInt(params.get('seed') ?? '1', 10) || 1;
-  const rows = parseInt(params.get('rows') ?? '64', 10) || 64;
-  const cols = parseInt(params.get('cols') ?? '64', 10) || 64;
+  const rows = parseInt(params.get('rows') ?? '256', 10) || 256;
+  const cols = parseInt(params.get('cols') ?? '128', 10) || 128;
 
   const sandbox = createSandboxLayer(app, rows, cols, seed);
   viewport.addChild(sandbox.root);
