@@ -161,8 +161,12 @@ const FOREST_MOISTURE = 0.55;
 const DESERT_MOISTURE = 0.35;    // 0.38 → 0.35 (desert rarer).
 const DESERT_TEMPERATURE = 0.55; // 0.50 → 0.55 (desert chỉ ở zone really warm).
 const URBAN_PROBABILITY = 0.006;
-const SMOOTHING_PASSES = 5;       // bumped 3 → 5 (more aggressive denoise).
-const OCEAN_FILL_NEIGHBORS = 4;   // 5 → 4 (more aggressive ocean speckle fill).
+const SMOOTHING_PASSES = 5;
+const OCEAN_FILL_NEIGHBORS = 4;
+// Phase 1.5 — macro region cohesion (kill speckle):
+const ELEV_BLUR_PASSES = 2;       // box blur elevation field BEFORE classify.
+const MOISTURE_BLUR_PASSES = 2;   // box blur moisture field BEFORE classify.
+const MIN_COMPONENT_SIZE = 6;     // flood-fill components < này → merge vào dominant neighbor.
 
 /**
  * Phase 1 worldgen — V2 reference (demo/index.html) ported.
@@ -232,6 +236,15 @@ function generateTerrainMap(rows: number, cols: number, seed: number): Uint8Arra
     }
   }
 
+  // Pass 1.5: blur elevation + moisture fields BEFORE classification (Phase 1.5).
+  // Smooth the field → cells gần nhau hơn nhau ít → cùng terrain class → mảng liền mạch.
+  for (let pass = 0; pass < ELEV_BLUR_PASSES; pass++) {
+    boxBlur(elevation, rows, cols);
+  }
+  for (let pass = 0; pass < MOISTURE_BLUR_PASSES; pass++) {
+    boxBlur(moisture, rows, cols);
+  }
+
   // Pass 2: classify per cell theo priority order.
   for (let i = 0; i < total; i++) {
     const elev = elevation[i]!;
@@ -262,10 +275,14 @@ function generateTerrainMap(rows: number, cols: number, seed: number): Uint8Arra
   }
 
   // Pass 3: smoothing — neighbor-majority để remove 1-cell speckles.
-  // Ocean fill protection cho Mountain (chains preserved).
   for (let pass = 0; pass < SMOOTHING_PASSES; pass++) {
     smoothMap(map, rows, cols);
   }
+
+  // Pass 3.5: flood-fill component cleanup (Phase 1.5).
+  // Find connected same-terrain regions; merge any < MIN_COMPONENT_SIZE vào dominant
+  // neighbor terrain. Kill last speckle that survives smoothing.
+  mergeSmallComponents(map, rows, cols, MIN_COMPONENT_SIZE);
 
   // Pass 4: Urban sparse overlay trên Plains/Coast/Hill (rare).
   const urbanRng = mulberry32(seed * 2027 + 31);
@@ -357,6 +374,109 @@ function smoothMap(map: Uint8Array, rows: number, cols: number): void {
         if (bestTerrain === Terrain.Ocean && counts[self as number]! > 0) continue;
         map[idx] = bestTerrain;
       }
+    }
+  }
+}
+
+// ─── Phase 1.5 macro region helpers ───────────────────────────────────────────
+
+/** Box blur Float32Array field in-place. 4-direction Manhattan (cheap, sufficient). */
+function boxBlur(field: Float32Array, rows: number, cols: number): void {
+  const original = new Float32Array(field);
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const idx = r * cols + c;
+      let sum = original[idx]!;
+      let count = 1;
+      if (r > 0)        { sum += original[idx - cols]!; count++; }
+      if (r < rows - 1) { sum += original[idx + cols]!; count++; }
+      if (c > 0)        { sum += original[idx - 1]!;    count++; }
+      if (c < cols - 1) { sum += original[idx + 1]!;    count++; }
+      field[idx] = sum / count;
+    }
+  }
+}
+
+/**
+ * Flood-fill component cleanup — merge small connected regions into dominant
+ * neighbor terrain. Kills speckle that survives smoothing.
+ *
+ * Algorithm:
+ *   1. Visit each unvisited cell; flood-fill same-terrain connected component.
+ *   2. If component.size < minSize: count border-neighbor terrain frequencies,
+ *      replace all component cells với dominant neighbor terrain.
+ *   3. Otherwise: leave intact (large region, preserve macro).
+ *
+ * Skip protection: Ocean components không merge (ocean speckle in continent
+ * already handled by Ocean-fill smoothing). Mountain components > 1 preserved.
+ */
+function mergeSmallComponents(
+  map: Uint8Array,
+  rows: number,
+  cols: number,
+  minSize: number,
+): void {
+  const total = rows * cols;
+  const visited = new Uint8Array(total);
+  const stack: number[] = [];
+  const component: number[] = [];
+  const counts = new Uint8Array(9); // 9 terrain types
+
+  for (let start = 0; start < total; start++) {
+    if (visited[start]) continue;
+    const terrain = map[start]!;
+
+    // Flood-fill collect connected component.
+    component.length = 0;
+    stack.length = 0;
+    stack.push(start);
+    visited[start] = 1;
+    while (stack.length > 0) {
+      const idx = stack.pop()!;
+      component.push(idx);
+      const r = (idx / cols) | 0;
+      const c = idx - r * cols;
+      for (const [nc, nr] of getOffsetNeighbors(c, r)) {
+        if (nr < 0 || nr >= rows || nc < 0 || nc >= cols) continue;
+        const nIdx = nr * cols + nc;
+        if (!visited[nIdx] && map[nIdx] === terrain) {
+          visited[nIdx] = 1;
+          stack.push(nIdx);
+        }
+      }
+    }
+
+    // Skip large components (preserve macro shape).
+    if (component.length >= minSize) continue;
+    // Skip Ocean cleanup (handled by smoothing's Ocean-fill).
+    if (terrain === Terrain.Ocean) continue;
+
+    // Count border-neighbor terrains.
+    counts.fill(0);
+    for (const cellIdx of component) {
+      const r = (cellIdx / cols) | 0;
+      const c = cellIdx - r * cols;
+      for (const [nc, nr] of getOffsetNeighbors(c, r)) {
+        if (nr < 0 || nr >= rows || nc < 0 || nc >= cols) continue;
+        const t = map[nr * cols + nc]!;
+        if (t !== terrain) counts[t]!++;
+      }
+    }
+
+    // Find dominant non-self neighbor terrain.
+    let bestTerrain: Terrain = terrain;
+    let bestCount = 0;
+    for (let t = 0; t < 9; t++) {
+      if (counts[t]! > bestCount) {
+        bestCount = counts[t]!;
+        bestTerrain = t as Terrain;
+      }
+    }
+    if (bestCount === 0) continue; // isolated (shouldn't happen on bounded map)
+
+    // Replace component cells với dominant neighbor.
+    for (const cellIdx of component) {
+      map[cellIdx] = bestTerrain;
     }
   }
 }
