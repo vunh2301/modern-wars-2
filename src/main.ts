@@ -17,6 +17,9 @@ import {
 import { createHexLayer } from './render/hexLayer';
 import { createMeshHexLayer } from './render/meshHexLayer';
 import { createBenchmark } from './render/benchmark';
+import { createSandboxLayer } from './sandbox/sandboxLayer';
+import { createDebugPanel } from './sandbox/sandboxDebugPanel';
+import { DEFAULT_WORLDGEN_PARAMS } from './sandbox/sandboxData';
 import { loadManifest } from './data/manifest';
 import { loadCountries } from './data/countries';
 import { loadTier } from './data/tiers';
@@ -54,6 +57,84 @@ interface UnifiedHexLayer {
   destroy(): void;
 }
 
+/**
+ * Sandbox mode (?map=sandbox) — synthetic 64×64 hex grid, 3 colored regions
+ * ở giữa. Skip ALL tier/chunk/manifest/LOD infrastructure. Texture experiments.
+ *
+ * URL params còn dùng được:
+ *   ?seed=N      different random region positions (default 1)
+ *   ?rows=N      grid rows (default 64)
+ *   ?cols=N      grid cols (default 64)
+ *   ?renderer=webgpu|webgl   (Phase 7.8 — passed to createStage)
+ */
+async function bootstrapSandbox(
+  app: Awaited<ReturnType<typeof createStage>>,
+  viewport: ReturnType<typeof createViewport>,
+): Promise<void> {
+  const params = new URLSearchParams(location.search);
+  const seed = parseInt(params.get('seed') ?? '1', 10) || 1;
+  const rows = parseInt(params.get('rows') ?? '256', 10) || 256;
+  const cols = parseInt(params.get('cols') ?? '128', 10) || 128;
+
+  const sandbox = createSandboxLayer(app, rows, cols, seed);
+  viewport.addChild(sandbox.root);
+
+  // FPS unlock (Phase 7.9 standard).
+  app.ticker.maxFPS = 0;
+  app.ticker.minFPS = 30;
+
+  // Fit viewport on sandbox bounds (centered at 0,0).
+  const fitX = app.screen.width / (sandbox.bounds.maxX - sandbox.bounds.minX);
+  const fitY = app.screen.height / (sandbox.bounds.maxY - sandbox.bounds.minY);
+  viewport.setZoom(Math.min(fitX, fitY) * 0.9, true);
+  viewport.moveCenter(0, 0);
+
+  // Resize handler reuse — sandbox không cần re-cull (single mesh always rendered).
+  window.addEventListener(
+    'resize',
+    () => resizeViewport(app, viewport),
+    { passive: true },
+  );
+
+  // HUD globals (HUD đã wire ở queueMicrotask phía dưới — chỉ set values).
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const w = window as any;
+  w.__mwApp = app;
+  w.__mwViewport = viewport;
+  w.__mwEngine = 'sandbox';
+  w.__mwTier = `${rows}x${cols}`;
+  w.__mwZoom = viewport.scale.x;
+  w.__mwHexCount = sandbox.hexCount;
+  w.__mwSandbox = sandbox;
+  w.__mwSetZoom = (z: number): void => {
+    viewport.setZoom(z, true);
+    w.__mwZoom = z;
+  };
+
+  viewport.on('zoomed', () => { w.__mwZoom = viewport.scale.x; });
+
+  // Mount debug panel — replace ?seed/?rows/?cols URL params với floating UI.
+  // Live regenerate: panel slider/preset → sandbox.regenerate(seed, params).
+  createDebugPanel({
+    initial: { seed, params: { ...DEFAULT_WORLDGEN_PARAMS } },
+    onRegenerate: ({ seed: newSeed, params: newParams }) => {
+      sandbox.regenerate(newSeed, newParams);
+      w.__mwHexCount = sandbox.hexCount;
+    },
+  });
+
+  performance.mark('boot-end');
+  performance.measure('boot-to-playable', 'boot-start', 'boot-end');
+  console.info('[boot] sandbox ready', {
+    engine: 'sandbox',
+    rows,
+    cols,
+    seed,
+    hexCount: sandbox.hexCount,
+    screen: { w: app.screen.width, h: app.screen.height },
+  });
+}
+
 async function bootstrap(): Promise<void> {
   performance.mark('boot-start');
 
@@ -69,6 +150,14 @@ async function bootstrap(): Promise<void> {
   app.stage.addChild(viewport);
   // Phase 6.7: infinite horizontal wrap (replaces tier-aware pan clamps).
   enableInfiniteWrap(viewport);
+
+  // BRANCH exp/texture-sandbox: ALWAYS sandbox mode (synthetic 64×64 grid +
+  // 3 random country regions). Bypass tier/chunk/manifest infrastructure.
+  // Production main branch không có code path này — production code dưới đây
+  // không reach trên branch này. Khi cherry-pick winners back, chỉ pick
+  // sandbox layer/data files, KHÔNG pick main.ts changes.
+  await bootstrapSandbox(app, viewport);
+  return;
 
   // Phase 7: engine selector. Default = mesh (Phase 7 path). ?engine=particles
   // falls back to Phase 6 ParticleContainer renderer (rollback path D-8).
@@ -133,9 +222,10 @@ async function bootstrap(): Promise<void> {
   // Use case: stress test single tier (e.g. ?tier=10km) without other tiers
   // polluting cache/CPU/memory. When locked, initial = locked tier, no
   // tier transitions, no adjacent prefetch.
-  const lockedTier = (() => {
+  const lockedTier: string | null = (() => {
     const t = new URLSearchParams(location.search).get('tier');
-    return t && availableTiers.has(t) ? t : null;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return t && availableTiers.has(t as any) ? t : null;
   })();
 
   // Initial: load coarsest tier (or locked tier for perf isolation).
@@ -202,7 +292,8 @@ async function bootstrap(): Promise<void> {
   const m = performance.getEntriesByName('boot-to-playable').pop();
   console.info('[boot] ready', {
     engine,
-    bootMs: m ? Math.round(m.duration) : null,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    bootMs: m ? Math.round((m as any).duration) : null,
     initialTier,
     countryCount: countries.countries.length,
     hexCount: manifest.tiles[initialTier]?.hexCount ?? 0,
