@@ -17,7 +17,7 @@ import {
   type Application,
   type Shader,
 } from 'pixi.js';
-import { createHexShader } from '../render/hexShader';
+import { createSandboxShader } from './sandboxShader';
 import { generateSandboxData } from './sandboxData';
 
 export interface SandboxLayer {
@@ -37,7 +37,7 @@ export function createSandboxLayer(
   root.label = 'sandbox-hex-layer';
   root.cullable = false;
 
-  const shader: Shader = createHexShader();
+  const shader: Shader = createSandboxShader();
   const data = generateSandboxData(rows, cols, seed);
 
   const templateBuf = new PixiBuffer({
@@ -53,11 +53,16 @@ export function createSandboxLayer(
     usage: BufferUsage.INDEX | BufferUsage.COPY_DST,
   });
 
+  // Sandbox extended buffer 16 bytes/instance (vs production 12):
+  //   [0..7]   pos     float32x2
+  //   [8..11]  color   unorm8x4
+  //   [12..15] meta    unorm8x4 (terrainId, seed, pad, pad)
   const geom = new Geometry({
     attributes: {
       aTemplate: { buffer: templateBuf, format: 'float32x2', offset: 0, stride: 8 },
-      aInstancePos: { buffer: instanceBuf, format: 'float32x2', offset: 0, stride: 12, instance: true },
-      aInstanceColor: { buffer: instanceBuf, format: 'unorm8x4', offset: 8, stride: 12, instance: true },
+      aInstancePos: { buffer: instanceBuf, format: 'float32x2', offset: 0, stride: 16, instance: true },
+      aInstanceColor: { buffer: instanceBuf, format: 'unorm8x4', offset: 8, stride: 16, instance: true },
+      aMeta: { buffer: instanceBuf, format: 'unorm8x4', offset: 12, stride: 16, instance: true },
     },
     indexBuffer: indexBuf,
     topology: 'triangle-list',

@@ -67,7 +67,8 @@ export function generateSandboxData(rows = 64, cols = 64, seed = 1): SandboxBuff
   }
 
   const hexCount = rows * cols;
-  const instances = new ArrayBuffer(hexCount * 12);
+  // 16 bytes/instance: cx:f32, cy:f32, color:unorm8x4, terrainId:u8, seed:u8, pad:u16
+  const instances = new ArrayBuffer(hexCount * 16);
   const instView = new DataView(instances);
 
   // Generate terrain map (2 noise layers: elevation + moisture).
@@ -76,10 +77,13 @@ export function generateSandboxData(rows = 64, cols = 64, seed = 1): SandboxBuff
   const halfC = Math.floor(cols / 2);
   const halfR = Math.floor(rows / 2);
 
+  // Per-hex deterministic seed (1 byte) — drives shader procedural noise jitter.
+  const seedRng = mulberry32(seed * 9001 + 7);
+
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
       const idx = r * cols + c;
-      const offset = idx * 12;
+      const offset = idx * 16;
 
       // FLAT-TOP offset coords (odd-q vertical layout) → rectangular bounding box.
       // x = size * 1.5 * c_centered
@@ -92,11 +96,17 @@ export function generateSandboxData(rows = 64, cols = 64, seed = 1): SandboxBuff
       instView.setFloat32(offset, x, true);
       instView.setFloat32(offset + 4, y, true);
 
-      const color = TERRAIN_COLORS[terrainMap[idx]!]!;
+      const terrainId = terrainMap[idx]!;
+      const color = TERRAIN_COLORS[terrainId]!;
       instView.setUint8(offset + 8, color[0]);
       instView.setUint8(offset + 9, color[1]);
       instView.setUint8(offset + 10, color[2]);
       instView.setUint8(offset + 11, color[3]);
+
+      // Extended bytes for shader procedural texture.
+      instView.setUint8(offset + 12, terrainId);              // terrainId 0..5
+      instView.setUint8(offset + 13, Math.floor(seedRng() * 256));  // per-hex seed
+      // [14..15] pad — leave 0
     }
   }
 
