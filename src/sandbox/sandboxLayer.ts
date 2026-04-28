@@ -76,7 +76,7 @@ export function createSandboxLayer(
   // flat-top pitch: x = size*1.5, y = size*√3
   const SIZE_PX = 4;
   const halfX = (cols / 2) * 1.5 * SIZE_PX;
-  const halfY = (rows / 2) * Math.sqrt(3) * SIZE_PX;
+  const halfY = (rows / 2) * Math.sqrt(3) * SIZE_PX + SIZE_PX * Math.sqrt(3) / 2;
 
   const destroy = (): void => {
     mesh.destroy({ children: true });

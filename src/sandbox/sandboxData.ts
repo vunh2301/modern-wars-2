@@ -81,11 +81,13 @@ export function generateSandboxData(rows = 64, cols = 64, seed = 1): SandboxBuff
       const idx = r * cols + c;
       const offset = idx * 12;
 
-      // FLAT-TOP axial layout: x = size*1.5*q, y = size*√3*(r + q/2).
-      const q = c - halfC;
-      const rAxial = r - halfR;
-      const x = sizeWorldPx * 1.5 * q;
-      const y = sizeWorldPx * Math.sqrt(3) * (rAxial + q / 2);
+      // FLAT-TOP offset coords (odd-q vertical layout) → rectangular bounding box.
+      // x = size * 1.5 * c_centered
+      // y = size * √3 * r_centered + (c%2==1 ? size*√3/2 : 0)
+      const cCol = c - halfC;
+      const rRow = r - halfR;
+      const x = sizeWorldPx * 1.5 * cCol;
+      const y = sizeWorldPx * Math.sqrt(3) * rRow + (c % 2 === 1 ? sizeWorldPx * Math.sqrt(3) / 2 : 0);
 
       instView.setFloat32(offset, x, true);
       instView.setFloat32(offset + 4, y, true);
