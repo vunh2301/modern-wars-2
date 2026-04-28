@@ -271,7 +271,7 @@ export function createDebugPanel(opts: DebugPanelOptions): { destroy(): void } {
     const valSpan = row.querySelector<HTMLSpanElement>('.val')!;
     input.addEventListener('input', () => {
       const v = parseFloat(input.value);
-      (state.params as Record<string, number>)[spec.key] = v;
+      (state.params as unknown as Record<string, number>)[spec.key] = v;
       valSpan.textContent = v.toFixed(spec.decimals);
       triggerRegen();
     });
