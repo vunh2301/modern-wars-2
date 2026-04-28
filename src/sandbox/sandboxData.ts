@@ -135,7 +135,7 @@ export function generateSandboxData(rows = 64, cols = 64, seed = 1): SandboxBuff
 // Math: top octave = baseFreq * 2^(octaves-1). ÷ minDim = cycles per cell.
 // Want < 0.3 cycles/cell ở top octave = neighbors share noise sample.
 // minDim = 128 cols → target top freq < 38.
-const ELEVATION_FREQ = 2.5;       // top = 2.5 * 16 = 40 / 128 = 0.31 cycles/cell ✓
+const ELEVATION_FREQ = 1.8;       // 2.5 → 1.8 (bigger continents).
 const ELEVATION_OCTAVES = 5;
 const RADIAL_FALLOFF_WEIGHT = 0.20;
 const ELEV_NOISE_WEIGHT = 0.80;
@@ -153,8 +153,8 @@ const TEMPERATURE_ELEV_PENALTY = 0.4;
 // Classification thresholds (re-tuned for distribution balance).
 const SEA_LEVEL = 0.40;          // 0.42 → 0.40 (slightly more land).
 const COAST_BAND = 0.05;         // 0.04 → 0.05 (wider coast ring).
-const MOUNTAIN_LEVEL = 0.78;     // 0.66 → 0.78 (mountain rare, only top 22% of elev).
-const HILL_BAND = 0.12;          // 0.10 → 0.12 (slightly wider hill ring).
+const MOUNTAIN_LEVEL = 0.70;     // 0.78 → 0.70 (more mountain visible after elev blur compresses range).
+const HILL_BAND = 0.14;          // wider hill ring around mountains.
 const SWAMP_MOISTURE = 0.70;     // 0.68 → 0.70 (rarer swamp).
 const SWAMP_ELEV_BAND = 0.18;    // tighter swamp zone (low elev only).
 const FOREST_MOISTURE = 0.55;
@@ -164,9 +164,9 @@ const URBAN_PROBABILITY = 0.006;
 const SMOOTHING_PASSES = 5;
 const OCEAN_FILL_NEIGHBORS = 4;
 // Phase 1.5 — macro region cohesion (kill speckle):
-const ELEV_BLUR_PASSES = 2;       // box blur elevation field BEFORE classify.
-const MOISTURE_BLUR_PASSES = 2;   // box blur moisture field BEFORE classify.
-const MIN_COMPONENT_SIZE = 6;     // flood-fill components < này → merge vào dominant neighbor.
+const ELEV_BLUR_PASSES = 3;       // 2 → 3 (smoother elevation field).
+const MOISTURE_BLUR_PASSES = 3;   // 2 → 3 (smoother moisture, less Forest speckle).
+const MIN_COMPONENT_SIZE = 12;    // 6 → 12 (kill bigger forest/desert speckles, force mảng liền mạch).
 
 /**
  * Phase 1 worldgen — V2 reference (demo/index.html) ported.
